@@ -1,0 +1,6 @@
+menuconfig MODULES_UART_TRACKER
+	bool "uart_tracker"
+	default n
+	---help---
+		UART based target tracker parser. Reads target information from a
+		closed vision/tracking module and publishes tracker_target uORB data.

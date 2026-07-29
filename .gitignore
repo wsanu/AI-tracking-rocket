@@ -1,0 +1,26 @@
+﻿# Build outputs
+build/
+cmake-build-*/
+*.o
+*.obj
+*.elf
+*.bin
+*.px4
+*.ulg
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Editors and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local PX4 checkout, if kept beside this overlay
+PX4-Autopilot/
+px4/
