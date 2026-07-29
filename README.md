@@ -34,11 +34,7 @@ px4_tracker_integration/src/modules/uart_tracker/UartTracker.cpp
 decode_tracker_payload()
 ```
 
-默认帧格式：
-
-```text
-AA 55 LEN MSG_ID PAYLOAD CRC16_LE
-```
+当前已按慧眼 V3.1 通讯协议实现反馈帧解析：`78 07 CMD0 CMD1 LEN DATA CHK 79`，并使用 `00 81` 测偏数据报文作为 PX4 闭环输入。
 
 详见 [docs/uart_protocol.md](docs/uart_protocol.md)。
 
@@ -76,7 +72,7 @@ listener tracker_target
 生成一帧测试数据：
 
 ```powershell
-python .\tools\make_tracker_frame.py --x 640 --y 360 --w 120 --h 80 --confidence 90 --valid
+python .\\tools\\make_tracker_frame.py --offset-x 25 --offset-y -12 --w 120 --h 80 --valid
 ```
 
 运行协议测试：
@@ -88,5 +84,4 @@ python -m unittest discover -s tests
 ## 当前限制
 
 - 本机网络无法连接 GitHub，尚未把 PX4-Autopilot 拉到本目录编译验证。
-- 闭源识别模块真实 UART 协议未知，当前实现使用占位协议。
 - 当前只完成“识别目标信息 -> PX4 uORB 可执行数据”的第一段；闭环控制律、发射安全逻辑和执行机构控制需要在拿到硬件约束后单独实现。

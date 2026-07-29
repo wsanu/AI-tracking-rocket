@@ -3,69 +3,74 @@ import argparse
 import struct
 
 
-SYNC = bytes([0xAA, 0x55])
-MSG_TRACKER_TARGET = 0x01
+FEEDBACK_HEAD = bytes([0x78, 0x07])
+FEEDBACK_END = 0x79
+CMD_PERIODIC = 0x00
+CMD_MISS_DISTANCE = 0x81
 
 
-def crc16_ccitt_false(data: bytes) -> int:
-    crc = 0xFFFF
-
-    for byte in data:
-        crc ^= byte << 8
-
-        for _ in range(8):
-            if crc & 0x8000:
-                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
-            else:
-                crc = (crc << 1) & 0xFFFF
-
-    return crc
+def checksum8(data: bytes) -> int:
+    return sum(data) & 0xFF
 
 
-def make_tracker_frame(
-    image_x: int,
-    image_y: int,
-    box_w: int,
-    box_h: int,
-    confidence: int,
+def make_feedback_frame(cmd0: int, cmd1: int, payload: bytes) -> bytes:
+    if len(payload) > 255:
+        raise ValueError("payload too long")
+
+    body = bytes([cmd0, cmd1, len(payload)]) + payload
+    return FEEDBACK_HEAD + body + bytes([checksum8(body), FEEDBACK_END])
+
+
+def make_miss_distance_frame(
+    offset_x: float,
+    offset_y: float,
+    width: int,
+    height: int,
     valid: bool,
-    source_age_ms: int,
+    running: bool,
+    angle_mode: bool,
+    channel: int,
 ) -> bytes:
-    flags = 0x01 if valid else 0x00
-    payload = struct.pack(
-        "<HHHHBBI",
-        image_x,
-        image_y,
-        box_w,
-        box_h,
-        confidence,
-        flags,
-        source_age_ms,
-    )
-    body = bytes([1 + len(payload), MSG_TRACKER_TARGET]) + payload
-    crc = crc16_ccitt_false(body)
-    return SYNC + body + struct.pack("<H", crc)
+    status = 0
+
+    if angle_mode:
+        status |= 1 << 2
+
+    if not running:
+        status |= 1 << 1
+
+    if valid:
+        status |= 1 << 0
+
+    if angle_mode:
+        payload = bytes([status, channel]) + struct.pack("<ffHH", offset_x, offset_y, width, height)
+    else:
+        payload = bytes([status, channel]) + struct.pack("<iiHH", int(offset_x), int(offset_y), width, height)
+
+    return make_feedback_frame(CMD_PERIODIC, CMD_MISS_DISTANCE, payload)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build one uart_tracker test frame.")
-    parser.add_argument("--x", type=int, required=True)
-    parser.add_argument("--y", type=int, required=True)
-    parser.add_argument("--w", type=int, required=True)
-    parser.add_argument("--h", type=int, required=True)
-    parser.add_argument("--confidence", type=int, default=90)
+    parser = argparse.ArgumentParser(description="Build one Huiyan V3.1 miss-distance feedback frame.")
+    parser.add_argument("--offset-x", type=float, required=True, help="right positive, pixels by default")
+    parser.add_argument("--offset-y", type=float, required=True, help="up positive, pixels by default")
+    parser.add_argument("--w", type=int, required=True, help="target box width in pixels")
+    parser.add_argument("--h", type=int, required=True, help="target box height in pixels")
     parser.add_argument("--valid", action="store_true")
-    parser.add_argument("--source-age-ms", type=int, default=0)
+    parser.add_argument("--stopped", action="store_true")
+    parser.add_argument("--angle-mode", action="store_true", help="encode offsets as float angles in degrees")
+    parser.add_argument("--channel", type=int, default=0)
     args = parser.parse_args()
 
-    frame = make_tracker_frame(
-        args.x,
-        args.y,
+    frame = make_miss_distance_frame(
+        args.offset_x,
+        args.offset_y,
         args.w,
         args.h,
-        args.confidence,
         args.valid,
-        args.source_age_ms,
+        not args.stopped,
+        args.angle_mode,
+        args.channel,
     )
     print(frame.hex(" "))
 

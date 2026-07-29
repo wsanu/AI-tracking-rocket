@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <px4_platform_common/module.h>
 #include <uORB/Publication.hpp>
@@ -24,41 +24,52 @@ public:
 private:
 	struct DecodedTarget {
 		bool valid{false};
+		bool bearing_rad_valid{false};
+		uint8_t target_id{0};
 		uint16_t image_x{0};
 		uint16_t image_y{0};
 		uint16_t box_w{0};
 		uint16_t box_h{0};
-		uint8_t confidence{0};
+		uint8_t confidence{100};
+		float bearing_x_rad{0.f};
+		float bearing_y_rad{0.f};
 		uint32_t source_age_ms{0};
 	};
 
 	enum class ParserState : uint8_t {
-		SyncA,
-		SyncB,
+		Head0,
+		Head1,
+		Cmd0,
+		Cmd1,
 		Length,
-		Body,
-		CrcLow,
-		CrcHigh,
+		Payload,
+		Checksum,
+		End,
 	};
 
-	static constexpr uint8_t kSyncA = 0xAA;
-	static constexpr uint8_t kSyncB = 0x55;
-	static constexpr uint8_t kTrackerMsgId = 0x01;
-	static constexpr uint8_t kMaxFrameLength = 64;
-	static constexpr uint8_t kTargetPayloadLength = 14;
+	static constexpr uint8_t kFeedbackHead0 = 0x78;
+	static constexpr uint8_t kFeedbackHead1 = 0x07;
+	static constexpr uint8_t kFeedbackEnd = 0x79;
+	static constexpr uint8_t kPeriodicCmd = 0x00;
+	static constexpr uint8_t kMissDistanceCmd = 0x81;
+	static constexpr uint8_t kDetectionCmd = 0x82;
+	static constexpr uint8_t kMaxPayloadLength = 255;
+	static constexpr uint8_t kMissDistancePayloadLength = 14;
 
 	bool open_uart();
 	void close_uart();
 	bool configure_uart();
 	void parse_byte(uint8_t byte);
-	void handle_frame(const uint8_t *body, uint8_t length);
-	bool decode_tracker_payload(const uint8_t *payload, uint8_t length, DecodedTarget &target);
+	void handle_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, uint8_t length);
+	bool decode_miss_distance_payload(const uint8_t *payload, uint8_t length, DecodedTarget &target);
 	void publish_target(const DecodedTarget &target);
 
-	static uint16_t crc16_ccitt_false(const uint8_t *data, uint8_t length);
+	static uint8_t checksum8(const uint8_t *data, uint16_t length);
 	static uint16_t read_u16_le(const uint8_t *data);
-	static uint32_t read_u32_le(const uint8_t *data);
+	static int32_t read_i32_le(const uint8_t *data);
+	static float read_float_le(const uint8_t *data);
 	static float deg_to_rad(float deg);
+	static uint16_t clamp_u16_from_i32(int32_t value, uint16_t max_value);
 
 	char _device[32]{};
 	int _baudrate{115200};
@@ -69,11 +80,13 @@ private:
 	float _hfov_rad{0.f};
 	float _vfov_rad{0.f};
 
-	ParserState _state{ParserState::SyncA};
-	uint8_t _frame_length{0};
-	uint8_t _body[kMaxFrameLength]{};
-	uint8_t _body_index{0};
-	uint8_t _crc_low{0};
+	ParserState _state{ParserState::Head0};
+	uint8_t _cmd0{0};
+	uint8_t _cmd1{0};
+	uint8_t _payload_length{0};
+	uint8_t _payload[kMaxPayloadLength]{};
+	uint8_t _payload_index{0};
+	uint8_t _checksum{0};
 
 	uint32_t _frame_count{0};
 	uint32_t _parse_error_count{0};

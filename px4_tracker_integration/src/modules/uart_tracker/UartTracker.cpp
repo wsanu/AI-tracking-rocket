@@ -1,4 +1,4 @@
-#include "UartTracker.hpp"
+﻿#include "UartTracker.hpp"
 
 #include <px4_platform_common/getopt.h>
 #include <px4_platform_common/log.h>
@@ -121,15 +121,15 @@ int UartTracker::print_usage(const char *reason)
 	PRINT_MODULE_DESCRIPTION(
 		R"DESCR_STR(
 ### Description
-Read target tracking frames from a UART vision module and publish tracker_target.
+Read Huiyan V3.1 tracking feedback frames from UART and publish tracker_target.
 )DESCR_STR");
 
 	PRINT_MODULE_USAGE_NAME("uart_tracker", "module");
 	PRINT_MODULE_USAGE_COMMAND("start");
 	PRINT_MODULE_USAGE_PARAM_STRING('d', "/dev/ttyS2", nullptr, "UART device", false);
 	PRINT_MODULE_USAGE_PARAM_INT('b', 115200, 9600, 921600, "UART baudrate", true);
-	PRINT_MODULE_USAGE_ARG("--width <px>", "image width", true);
-	PRINT_MODULE_USAGE_ARG("--height <px>", "image height", true);
+	PRINT_MODULE_USAGE_ARG("--width <px>", "video output width", true);
+	PRINT_MODULE_USAGE_ARG("--height <px>", "video output height", true);
 	PRINT_MODULE_USAGE_ARG("--hfov <deg>", "horizontal camera field of view", true);
 	PRINT_MODULE_USAGE_ARG("--vfov <deg>", "vertical camera field of view", true);
 	PRINT_MODULE_USAGE_COMMAND("stop");
@@ -254,91 +254,134 @@ bool UartTracker::configure_uart()
 void UartTracker::parse_byte(uint8_t byte)
 {
 	switch (_state) {
-	case ParserState::SyncA:
-		_state = (byte == kSyncA) ? ParserState::SyncB : ParserState::SyncA;
+	case ParserState::Head0:
+		_state = (byte == kFeedbackHead0) ? ParserState::Head1 : ParserState::Head0;
 		break;
 
-	case ParserState::SyncB:
-		_state = (byte == kSyncB) ? ParserState::Length : ParserState::SyncA;
+	case ParserState::Head1:
+		_state = (byte == kFeedbackHead1) ? ParserState::Cmd0 : ParserState::Head0;
+		break;
+
+	case ParserState::Cmd0:
+		_cmd0 = byte;
+		_state = ParserState::Cmd1;
+		break;
+
+	case ParserState::Cmd1:
+		_cmd1 = byte;
+		_state = ParserState::Length;
 		break;
 
 	case ParserState::Length:
-		if (byte == 0 || byte > kMaxFrameLength) {
-			_parse_error_count++;
-			_state = ParserState::SyncA;
-			break;
-		}
-
-		_frame_length = byte;
-		_body_index = 0;
-		_body[_body_index++] = byte;
-		_state = ParserState::Body;
+		_payload_length = byte;
+		_payload_index = 0;
+		_state = (_payload_length == 0) ? ParserState::Checksum : ParserState::Payload;
 		break;
 
-	case ParserState::Body:
-		_body[_body_index++] = byte;
+	case ParserState::Payload:
+		_payload[_payload_index++] = byte;
 
-		if (_body_index >= _frame_length + 1) {
-			_state = ParserState::CrcLow;
+		if (_payload_index >= _payload_length) {
+			_state = ParserState::Checksum;
 		}
 
 		break;
 
-	case ParserState::CrcLow:
-		_crc_low = byte;
-		_state = ParserState::CrcHigh;
+	case ParserState::Checksum:
+		_checksum = byte;
+		_state = ParserState::End;
 		break;
 
-	case ParserState::CrcHigh: {
-			const uint16_t received_crc = (uint16_t)_crc_low | ((uint16_t)byte << 8);
-			const uint16_t computed_crc = crc16_ccitt_false(_body, _frame_length + 1);
+	case ParserState::End: {
+			if (byte != kFeedbackEnd) {
+				_parse_error_count++;
+				_state = ParserState::Head0;
+				break;
+			}
 
-			if (received_crc == computed_crc) {
-				handle_frame(&_body[1], _frame_length);
+			uint8_t checksum_data[kMaxPayloadLength + 3]{};
+			checksum_data[0] = _cmd0;
+			checksum_data[1] = _cmd1;
+			checksum_data[2] = _payload_length;
+			memcpy(&checksum_data[3], _payload, _payload_length);
+
+			if (_checksum == checksum8(checksum_data, (uint16_t)_payload_length + 3)) {
+				handle_frame(_cmd0, _cmd1, _payload, _payload_length);
 
 			} else {
 				_parse_error_count++;
 			}
 
-			_state = ParserState::SyncA;
+			_state = ParserState::Head0;
 			break;
 		}
 	}
 }
 
-void UartTracker::handle_frame(const uint8_t *body, uint8_t length)
+void UartTracker::handle_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, uint8_t length)
 {
-	if (length < 1 || body[0] != kTrackerMsgId) {
-		_parse_error_count++;
+	if (cmd0 != kPeriodicCmd) {
 		return;
 	}
 
 	DecodedTarget target{};
 
-	if (!decode_tracker_payload(&body[1], length - 1, target)) {
-		_parse_error_count++;
+	if (cmd1 == kMissDistanceCmd) {
+		if (!decode_miss_distance_payload(payload, length, target)) {
+			_parse_error_count++;
+			return;
+		}
+
+		_frame_count++;
+		publish_target(target);
 		return;
 	}
 
-	_frame_count++;
-	publish_target(target);
+	if (cmd1 == kDetectionCmd) {
+		// AI detection frames (00 82) are intentionally ignored for control until
+		// the 11-byte per-target layout is confirmed from the vendor.
+		return;
+	}
 }
 
-bool UartTracker::decode_tracker_payload(const uint8_t *payload, uint8_t length, DecodedTarget &target)
+bool UartTracker::decode_miss_distance_payload(const uint8_t *payload, uint8_t length, DecodedTarget &target)
 {
-	if (length != kTargetPayloadLength) {
+	if (length != kMissDistancePayloadLength) {
 		return false;
 	}
 
-	target.image_x = read_u16_le(&payload[0]);
-	target.image_y = read_u16_le(&payload[2]);
-	target.box_w = read_u16_le(&payload[4]);
-	target.box_h = read_u16_le(&payload[6]);
-	target.confidence = payload[8];
-	target.valid = (payload[9] & 0x01) != 0;
-	target.source_age_ms = read_u32_le(&payload[10]);
+	const uint8_t status = payload[0];
+	const bool angle_mode = (status & (1 << 2)) != 0;
+	const bool tracker_stopped = (status & (1 << 1)) != 0;
+	const bool data_valid = (status & (1 << 0)) != 0;
 
-	return target.image_x < _image_width && target.image_y < _image_height && target.confidence <= 100;
+	target.valid = data_valid && !tracker_stopped;
+	target.target_id = payload[1];
+	target.box_w = read_u16_le(&payload[10]);
+	target.box_h = read_u16_le(&payload[12]);
+	target.confidence = target.valid ? 100 : 0;
+
+	if (angle_mode) {
+		const float offset_right_deg = read_float_le(&payload[2]);
+		const float offset_up_deg = read_float_le(&payload[6]);
+
+		target.bearing_rad_valid = true;
+		target.bearing_x_rad = deg_to_rad(offset_right_deg);
+		target.bearing_y_rad = deg_to_rad(offset_up_deg);
+		target.image_x = _image_width / 2;
+		target.image_y = _image_height / 2;
+		return true;
+	}
+
+	const int32_t offset_right_px = read_i32_le(&payload[2]);
+	const int32_t offset_up_px = read_i32_le(&payload[6]);
+	const int32_t center_x = (int32_t)_image_width / 2;
+	const int32_t center_y = (int32_t)_image_height / 2;
+
+	target.image_x = clamp_u16_from_i32(center_x + offset_right_px, _image_width > 0 ? _image_width - 1 : 0);
+	target.image_y = clamp_u16_from_i32(center_y - offset_up_px, _image_height > 0 ? _image_height - 1 : 0);
+
+	return true;
 }
 
 void UartTracker::publish_target(const DecodedTarget &target)
@@ -346,18 +389,25 @@ void UartTracker::publish_target(const DecodedTarget &target)
 	tracker_target_s msg{};
 	msg.timestamp = hrt_absolute_time();
 	msg.valid = target.valid;
-	msg.target_id = 0;
+	msg.target_id = target.target_id;
 	msg.image_x = target.image_x;
 	msg.image_y = target.image_y;
 	msg.box_w = target.box_w;
 	msg.box_h = target.box_h;
 	msg.confidence = (float)target.confidence * 0.01f;
 
-	const float centered_x = ((float)target.image_x - ((float)_image_width * 0.5f)) / ((float)_image_width * 0.5f);
-	const float centered_y = ((float)target.image_y - ((float)_image_height * 0.5f)) / ((float)_image_height * 0.5f);
+	if (target.bearing_rad_valid) {
+		msg.bearing_x_rad = target.bearing_x_rad;
+		msg.bearing_y_rad = target.bearing_y_rad;
 
-	msg.bearing_x_rad = centered_x * (_hfov_rad * 0.5f);
-	msg.bearing_y_rad = -centered_y * (_vfov_rad * 0.5f);
+	} else {
+		const float centered_x = ((float)target.image_x - ((float)_image_width * 0.5f)) / ((float)_image_width * 0.5f);
+		const float centered_y = ((float)target.image_y - ((float)_image_height * 0.5f)) / ((float)_image_height * 0.5f);
+
+		msg.bearing_x_rad = centered_x * (_hfov_rad * 0.5f);
+		msg.bearing_y_rad = -centered_y * (_vfov_rad * 0.5f);
+	}
+
 	msg.size_ratio = ((float)target.box_w * (float)target.box_h) / ((float)_image_width * (float)_image_height);
 	msg.source_age_ms = target.source_age_ms;
 	msg.frame_count = _frame_count;
@@ -366,19 +416,15 @@ void UartTracker::publish_target(const DecodedTarget &target)
 	_tracker_target_pub.publish(msg);
 }
 
-uint16_t UartTracker::crc16_ccitt_false(const uint8_t *data, uint8_t length)
+uint8_t UartTracker::checksum8(const uint8_t *data, uint16_t length)
 {
-	uint16_t crc = 0xFFFF;
+	uint32_t sum = 0;
 
-	for (uint8_t i = 0; i < length; i++) {
-		crc ^= (uint16_t)data[i] << 8;
-
-		for (uint8_t bit = 0; bit < 8; bit++) {
-			crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
-		}
+	for (uint16_t i = 0; i < length; i++) {
+		sum += data[i];
 	}
 
-	return crc;
+	return (uint8_t)(sum & 0xff);
 }
 
 uint16_t UartTracker::read_u16_le(const uint8_t *data)
@@ -386,14 +432,35 @@ uint16_t UartTracker::read_u16_le(const uint8_t *data)
 	return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
 }
 
-uint32_t UartTracker::read_u32_le(const uint8_t *data)
+int32_t UartTracker::read_i32_le(const uint8_t *data)
 {
-	return (uint32_t)data[0] | ((uint32_t)data[1] << 8) | ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+	return (int32_t)((uint32_t)data[0] | ((uint32_t)data[1] << 8) | ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24));
+}
+
+float UartTracker::read_float_le(const uint8_t *data)
+{
+	uint32_t raw = (uint32_t)data[0] | ((uint32_t)data[1] << 8) | ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+	float value{};
+	memcpy(&value, &raw, sizeof(value));
+	return value;
 }
 
 float UartTracker::deg_to_rad(float deg)
 {
 	return deg * (float)M_PI / 180.f;
+}
+
+uint16_t UartTracker::clamp_u16_from_i32(int32_t value, uint16_t max_value)
+{
+	if (value < 0) {
+		return 0;
+	}
+
+	if (value > (int32_t)max_value) {
+		return max_value;
+	}
+
+	return (uint16_t)value;
 }
 
 extern "C" __EXPORT int uart_tracker_main(int argc, char *argv[])
