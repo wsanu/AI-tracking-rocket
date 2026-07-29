@@ -50,22 +50,9 @@ AA 55 LEN MSG_ID PAYLOAD CRC16_LE
 .\scripts\install_px4_overlay.ps1 -Px4Root E:\PX4-Autopilot
 ```
 
-脚本会复制：
+脚本会复制 `tracker_target.msg` 和 `uart_tracker` 模块，并默认尝试为 `px4/fmu-v6x` 与 `px4/sitl` 启用 `CONFIG_MODULES_UART_TRACKER=y`。
 
-```text
-px4_tracker_integration/msg/tracker_target.msg
-px4_tracker_integration/src/modules/uart_tracker
-```
-
-然后需要在 PX4 源码里启用模块：
-
-1. 在 `src/modules/CMakeLists.txt` 加入：
-
-```cmake
-add_subdirectory(uart_tracker)
-```
-
-2. 在目标板配置，例如 `boards/<vendor>/<board>/default.px4board` 加入：
+如果使用其他目标板，需要在对应板配置里启用模块，例如 `boards/<vendor>/<board>/default.px4board` 加入：
 
 ```text
 CONFIG_MODULES_UART_TRACKER=y

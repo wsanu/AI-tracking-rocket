@@ -24,3 +24,7 @@ Thumbs.db
 # Local PX4 checkout, if kept beside this overlay
 PX4-Autopilot/
 px4/
+
+# Downloaded archives
+*.zip
+PX4-Autopilot-main/
