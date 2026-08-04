@@ -1,0 +1,7 @@
+menuconfig MODULES_TRACK_CONTROL
+	bool "track_control"
+	default n
+	---help---
+		TRACK flight-mode attitude setpoint generator. Keeps an upward-mounted
+		camera optical axis pointed at tracker_target while RC yaw commands
+		twist and RC throttle commands total thrust.

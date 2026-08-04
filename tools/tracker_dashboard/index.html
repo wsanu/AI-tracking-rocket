@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>慧眼 UART 监视器</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="product">
+        <div class="product-mark" aria-hidden="true"><span></span></div>
+        <div>
+          <h1>慧眼 UART 监视器</h1>
+          <p>NxtPX4v2 · PX4 v1.15.4</p>
+        </div>
+      </div>
+      <div class="connection-cluster">
+        <span id="browser-state" class="warning" hidden>请使用 Chrome 或 Edge</span>
+        <span id="connection-state" class="connection-state" data-connected="false">未连接</span>
+        <button id="connect-button" class="primary-button" type="button">连接</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="control-band" aria-label="连接与输入设置">
+        <div class="control-group">
+          <span class="control-label">输入</span>
+          <div class="segmented-control" role="group" aria-label="输入模式">
+            <button type="button" data-input-mode="simulation" class="active" aria-pressed="true">模拟器</button>
+            <button type="button" data-input-mode="serial" aria-pressed="false">USB 串口</button>
+          </div>
+        </div>
+        <label class="field compact-field">
+          <span>波特率</span>
+          <select id="baud-rate">
+            <option value="57600">57600</option>
+            <option value="115200" selected>115200</option>
+            <option value="230400">230400</option>
+            <option value="460800">460800</option>
+            <option value="921600">921600</option>
+          </select>
+        </label>
+        <div class="read-only-badge">只读监视</div>
+      </section>
+
+      <section id="simulator-panel" class="settings-band" aria-label="模拟器设置">
+        <label class="field">
+          <span>场景</span>
+          <select id="simulator-scenario">
+            <option value="pixel">像素偏差</option>
+            <option value="angle">角度偏差</option>
+            <option value="lost">目标丢失</option>
+          </select>
+        </label>
+        <label class="field range-field">
+          <span>帧率 <output id="simulator-rate-value">20 Hz</output></span>
+          <input id="simulator-rate" type="range" min="1" max="50" value="20" step="1" />
+        </label>
+        <label class="field range-field">
+          <span>运动幅度 <output id="simulator-amplitude-value">50%</output></span>
+          <input id="simulator-amplitude" type="range" min="5" max="100" value="50" step="5" />
+        </label>
+      </section>
+
+      <section class="workspace">
+        <div class="tracking-column">
+          <div id="tracking-stage" class="tracking-stage" data-valid="false">
+            <div class="stage-grid" aria-hidden="true"></div>
+            <div class="center-axis horizontal" aria-hidden="true"></div>
+            <div class="center-axis vertical" aria-hidden="true"></div>
+            <div class="center-reticle" aria-hidden="true"></div>
+            <div id="target-box" class="target-box" hidden></div>
+            <div id="target-marker" class="target-marker" hidden></div>
+            <div class="axis-label x-positive">右 +</div>
+            <div class="axis-label x-negative">− 左</div>
+            <div class="axis-label y-positive">上 +</div>
+            <div class="axis-label y-negative">− 下</div>
+            <div id="target-state" class="target-state">等待数据</div>
+          </div>
+
+          <div class="calibration-strip" aria-label="画面与视场设置">
+            <label>
+              <span>画面宽度</span>
+              <input id="image-width" type="number" min="1" max="8192" value="1280" />
+            </label>
+            <label>
+              <span>画面高度</span>
+              <input id="image-height" type="number" min="1" max="8192" value="720" />
+            </label>
+            <label>
+              <span>水平视场</span>
+              <input id="horizontal-fov" type="number" min="1" max="179" value="62" step="0.1" />
+            </label>
+            <label>
+              <span>垂直视场</span>
+              <input id="vertical-fov" type="number" min="1" max="179" value="48" step="0.1" />
+            </label>
+          </div>
+        </div>
+
+        <aside class="telemetry-panel" aria-label="跟踪遥测">
+          <div class="panel-heading">
+            <h2>跟踪遥测</h2>
+            <span id="input-protocol">等待数据</span>
+          </div>
+          <div class="offset-readout">
+            <div>
+              <span>X 偏差</span>
+              <strong id="offset-x">--</strong>
+            </div>
+            <div>
+              <span>Y 偏差</span>
+              <strong id="offset-y">--</strong>
+            </div>
+            <span id="offset-unit" class="unit">--</span>
+          </div>
+          <dl class="metrics">
+            <div><dt>目标 ID</dt><dd id="target-id">--</dd></div>
+            <div><dt>目标尺寸</dt><dd id="target-size">-- × --</dd></div>
+            <div><dt>接收速率</dt><dd id="packet-rate">0 Hz</dd></div>
+            <div><dt>有效帧</dt><dd id="frame-count">0</dd></div>
+            <div><dt>解析错误</dt><dd id="error-count">0</dd></div>
+            <div><dt>最后更新</dt><dd id="last-frame-time">--:--:--</dd></div>
+          </dl>
+        </aside>
+      </section>
+
+      <section class="log-section" aria-label="原始帧日志">
+        <div class="log-toolbar">
+          <h2>原始帧</h2>
+          <div class="log-actions">
+            <label class="toggle">
+              <input id="pause-log" type="checkbox" />
+              <span>暂停滚动</span>
+            </label>
+            <button id="clear-log" type="button" class="quiet-button">清空</button>
+            <button id="download-log" type="button" class="quiet-button">导出 CSV</button>
+          </div>
+        </div>
+        <div class="log-table-wrap">
+          <table>
+            <thead>
+              <tr><th>时间</th><th>协议</th><th>内容</th><th>十六进制数据</th></tr>
+            </thead>
+            <tbody id="raw-log"></tbody>
+          </table>
+          <p id="empty-log" class="empty-log">尚未收到数据</p>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>

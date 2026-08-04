@@ -1,87 +1,98 @@
-﻿# 自动追踪小火箭
+# PX4 慧眼目标跟踪与 TRACK 飞行模式
 
-这是一个从空目录开始搭建的 PX4 自动追踪小火箭工程仓库。目标是把闭源视觉识别/追踪模块通过 UART 输出的目标信息，接入 PX4 固件，并转换成飞控内可消费的 uORB 消息。
+本仓库用于把慧眼 V3.1 视觉模块的 UART 目标数据接入 PX4，并在自定义 `Track` 飞行模式中生成姿态设定值。当前版本已完成软件回归、固件编译、真实 UART 数据接收、模式切换，以及拆桨状态下四路电机差动输出验证；尚未完成带桨悬停、目标丢失、RC 丢失和实际跟踪飞行验证。
 
-当前仓库不直接包含完整 PX4 源码，而是提供一个可合入 PX4-Autopilot 的 overlay：
-
-- `px4_tracker_integration/src/modules/uart_tracker`: PX4 模块源码
-- `px4_tracker_integration/msg/tracker_target.msg`: 新增 uORB 消息
-- `docs`: 架构和 UART 协议说明
-- `scripts`: 把 overlay 安装到 PX4 源码树的脚本
-- `tools`: 生成/检查 UART 测试帧的小工具
-- `tests`: 无飞控硬件时的协议级单元测试
-
-官方 PX4 固件仓库：
-
-https://github.com/PX4/PX4-Autopilot
-
-## 数据流
+## 数据链路
 
 ```text
-闭源视觉模块
-  -> UART
-  -> PX4 uart_tracker 模块
-  -> tracker_target uORB
-  -> 后续制导/云台/任务控制模块
+慧眼 UART
+  -> uart_tracker
+  -> TrackerTarget uORB
+  -> track_control
+  -> vehicle_attitude_setpoint
+  -> mc_att_control / mc_rate_control / control_allocator
+  -> 四路电机
 ```
 
-## 默认 UART 协议
+## 目录职责
 
-在闭源模块真实协议未给出前，仓库先定义一个工程可调试协议。后续适配真实协议时，主要修改：
+| 目录 | 用途 | 维护规则 |
+| --- | --- | --- |
+| `design_sourse/` | 用户说明、通讯协议、TRACK 设计报告 | 设计输入，只读保留，不改名 |
+| `px4_tracker_integration/` | PX4 消息、`uart_tracker`、`track_control` 覆盖层 | 本项目功能源码的唯一维护入口 |
+| `scripts/` | 覆盖层安装和目录校验脚本 | 修改后必须执行校验 |
+| `PX4-Autopilot/` | 本机 PX4 工作树 | 由覆盖层同步生成，不作为独立源码维护 |
+| `tools/` | 浏览器仪表板和测试辅助工具 | 与协议测试同步维护 |
+| `tests/` | Python 与 JavaScript 回归测试 | 修改协议或消息映射后运行 |
+| `docs/` | 架构、协议、TRACK 模式、维护说明和测试记录 | 与实现和实测结果同步更新 |
+| `firmware/` | 已验证固件归档 | 用 SHA-256 标识，不覆盖旧版本 |
+| `artifacts/` | 原始测试数据和非源码证据 | 不放入源码目录 |
+| `uart_example/` | 厂商示例 | 上游参考，只读保留 |
+
+详细维护规则见 [工程维护说明](docs/maintenance.md)，本次验证结果见 [2026-08-04 TRACK 拆桨台架测试](docs/test_records/2026-08-04-track-bench.md)。
+
+## 硬件接口
+
+慧眼模块接入 `TELEM4 / UART8`，PX4 设备为 `/dev/ttyS7`：
 
 ```text
-px4_tracker_integration/src/modules/uart_tracker/UartTracker.cpp
-decode_tracker_payload()
+模块 TX  -> UART8 RX
+模块 RX  -> UART8 TX（仅接收目标数据时可不接）
+模块 GND -> GND
 ```
 
-当前已按慧眼 V3.1 通讯协议实现反馈帧解析：`78 07 CMD0 CMD1 LEN DATA CHK 79`，并使用 `00 81` 测偏数据报文作为 PX4 闭环输入。
+只能接 3.3 V TTL UART，不能将 RS-232 电平直接接入飞控。
 
-详见 [docs/uart_protocol.md](docs/uart_protocol.md)。
+## 同步与编译
 
-## 合入 PX4 固件
-
-假设 PX4-Autopilot 在 `E:\PX4-Autopilot`：
+在 Windows PowerShell 仓库根目录执行：
 
 ```powershell
-.\scripts\install_px4_overlay.ps1 -Px4Root E:\PX4-Autopilot
+.\scripts\install_px4_overlay.ps1
+.\scripts\install_track_mode_overlay.ps1
+.\scripts\verify_layout.ps1
 ```
 
-脚本会复制 `tracker_target.msg` 和 `uart_tracker` 模块，并默认尝试为 `px4/fmu-v6x` 与 `px4/sitl` 启用 `CONFIG_MODULES_UART_TRACKER=y`。
-
-如果使用其他目标板，需要在对应板配置里启用模块，例如 `boards/<vendor>/<board>/default.px4board` 加入：
-
-```text
-CONFIG_MODULES_UART_TRACKER=y
-```
-
-编译示例：
-
-```powershell
-make px4_fmu-v6x_default
-```
-
-## 飞控上启动
+在 WSL 中编译：
 
 ```sh
-uart_tracker start -d /dev/ttyS2 -b 115200 --width 1280 --height 720 --hfov 62 --vfov 48
-listener tracker_target
+cd /home/wsanu/rocket_tracker/PX4-Autopilot
+make hkust_nxt-dual_default -j4
 ```
 
-## 本地验证
+当前已验证固件 SHA-256 为 `ae7803cf7aa9c9dd6cf24f4757d237746d0691559259f6ab06bbcd33b7677432`。
 
-生成一帧测试数据：
+## 运行与检查
 
-```powershell
-python .\\tools\\make_tracker_frame.py --offset-x 25 --offset-y -12 --w 120 --h 80 --valid
+当前板级默认参数可直接启动串口解析器：
+
+```sh
+uart_tracker start
+uart_tracker status
+track_control status
+listener tracker_target -n 5
+listener vehicle_status -n 1
+listener track_status -n 5
 ```
 
-运行协议测试：
+已知限制：当前命令行长选项 `--width`、`--height`、`--hfov`、`--vfov` 会导致实例化失败，应先使用板级默认参数启动。退出 TRACK 后，`track_status` 可能保留最后一帧；判断当前模式应以 `vehicle_status.nav_state` 和消息时间戳为准。
+
+`Track` 对应飞行模式编号 `16`。台架验证中使用 `COM_FLTMODE6=16`，实际映射以 QGroundControl 的通道监视器为准。不能在 TRACK 中直接解锁，应先在 Stabilized 或 Position 中完成检查和解锁，再按测试计划切换。
+
+## 自动测试
 
 ```powershell
 python -m unittest discover -s tests
+node --test tests\test_dashboard_protocol.mjs
+node --test tests\test_dashboard_mavlink.mjs
+.\scripts\verify_layout.ps1
 ```
 
-## 当前限制
+如果系统没有安装 Node.js，可使用 Codex 工作区依赖中附带的 Node 运行 JavaScript 测试。
 
-- 本机网络无法连接 GitHub，尚未把 PX4-Autopilot 拉到本目录编译验证。
-- 当前只完成“识别目标信息 -> PX4 uORB 可执行数据”的第一段；闭环控制律、发射安全逻辑和执行机构控制需要在拿到硬件约束后单独实现。
+## 安全边界
+
+- 所有首次电机和控制链路测试必须拆桨并固定机体。
+- 台架差动输出通过只证明控制链路接通，不等同于飞行安全验证。
+- 上桨前必须完成传感器、机架、电源、遥控器、失控保护、电机顺序和旋向检查。
+- `COM_DISARM_PRFLT` 和 `COM_DISARM_LAND` 只能改变自动上锁等待时间，不能替代安全检查。

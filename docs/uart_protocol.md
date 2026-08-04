@@ -1,4 +1,4 @@
-﻿# 慧眼 V3.1 UART 协议摘录
+# 慧眼 V3.1 UART 协议摘录
 
 来源：`慧眼_串口通信协议v3.1.docx`。
 
@@ -84,14 +84,63 @@ Payload：
 78 07 00 82 LEN DATA... CHK 79
 ```
 
-文档说明：
+根据 `uart_example/serial_monitor-2.c`，Payload 为：
 
-- `byte0`: 帧 ID，0~255 循环
-- `byte1`: 总目标个数，最大 64
-- `byte2`: 当前报文目标个数，最大 22
-- `byte3~byteN`: Targets，按当前报文目标个数决定，每个目标 11 字节
+| 偏移 | 类型 | 名称 | 说明 |
+| ---: | --- | --- | --- |
+| 0 | `u8` | 帧 ID | 0~255 循环 |
+| 1 | `u8` | 总目标个数 | 最大 64 |
+| 2 | `u8` | 当前报文目标个数 | 最大 22 |
+| 3+N*11 | `u8` | 目标 ID | 当前目标 ID |
+| 4+N*11 | `u8` | 目标类型 | 目标分类/类型 |
+| 5+N*11 | `u8` | 置信度 | 0~100 |
+| 6+N*11 | `u16` | x | 目标框 x |
+| 8+N*11 | `u16` | y | 目标框 y |
+| 10+N*11 | `u16` | w | 目标框宽度 |
+| 12+N*11 | `u16` | h | 目标框高度 |
 
-当前文档正文未展开每个目标 11 字节的字段布局，所以 PX4 模块暂不把 `00 82` 用于控制闭环。
+PX4 模块会从当前报文目标中选择置信度最高的目标，按 `x/y/w/h` 转换为框中心并发布 `tracker_target`。如果启用了 `--action gimbal`，AI 检测目标也会参与云台动作输出。
+
+## 心跳报文
+
+```text
+78 07 00 83 06 DATA[6] CHK 79
+```
+
+根据 `uart_example/serial_monitor-2.c`，Payload 为：
+
+| 偏移 | 类型 | 名称 | 说明 |
+| ---: | --- | --- | --- |
+| 0 | `u16` | 心跳计数 | 小端 |
+| 2 | `u32` | 自检码 | `0` 表示正常，非零表示故障 |
+
+PX4 模块会在 `uart_tracker status` 中显示心跳数量、最后心跳计数和最后自检码。
+
+## UART 信息转换为动作
+
+`uart_tracker` 现在支持把有效的 `00 81` 测偏数据转换为 PX4 云台动作输出。默认仍然是只解析和发布 `tracker_target`，不会输出动作；需要显式启用：
+
+```sh
+uart_tracker start -d /dev/ttyS7 -b 115200 --width 1280 --height 720 --hfov 62 --vfov 48 --action gimbal
+```
+
+动作输出话题：`gimbal_manager_set_manual_control`
+
+转换规则：
+
+- 目标有效且跟踪板处于运行状态时，按目标相对画面中心的水平/垂直角度误差输出 `yaw_rate` 和 `pitch_rate`。
+- 目标丢失、数据无效或跟踪停止时，输出零速率，让云台停止继续追。
+- `--deadband-deg <deg>` 设置小误差死区，默认 `0.5` 度。
+- `--action-gain <value>` 设置动作增益，默认 `1.0`；最终速率会限幅到 `-1..1`，再由 PX4 云台参数 `MNT_RATE_PITCH` / `MNT_RATE_YAW` 转成实际角速度。
+
+示例：
+
+```sh
+uart_tracker start -d /dev/ttyS7 -b 115200 --action gimbal --action-gain 0.7 --deadband-deg 1.0
+listener gimbal_manager_set_manual_control
+```
+
+注意：PX4 的 gimbal manager 会检查 `origin_sysid/origin_compid` 是否是当前云台主控源。模块当前使用 `1/1` 作为板载动作源；如果 `listener gimbal_manager_set_manual_control` 能看到数据但云台不响应，需要把 gimbal manager 的主控源配置为匹配该来源，或后续把模块里的来源 ID 改成你的系统约定。
 
 ## 本地测试
 

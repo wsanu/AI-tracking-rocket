@@ -1,4 +1,4 @@
-﻿# 架构说明
+# 架构说明
 
 ## 目标
 
@@ -63,3 +63,14 @@ uart_tracker -> tracker_target -> guidance module -> actuator/control setpoint
 ```
 
 这样可以单独加入目标丢失保护、置信度阈值、发射安全条件、速度限制、手动接管和 failsafe。
+## TRACK 控制层
+
+原 UART 数据接入层保持不变，并在其上追加独立控制层：
+
+```text
+uart_tracker -> tracker_target(direction_body) -> track_control
+             -> vehicle_attitude_setpoint -> mc_att_control
+             -> mc_rate_control -> control_allocator -> motor output
+```
+
+`track_control` 只处理视线方向、twist、手动总推力、姿态渐入/限制和目标丢失；不会重新实现 PID 或混控。`mc_att_control` 在 `NAVIGATION_STATE_TRACK` 下禁止生成普通 Stabilized 手动姿态设定，因此任一时刻只有一个 TRACK 姿态设定源。

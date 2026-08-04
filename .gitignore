@@ -1,4 +1,4 @@
-﻿# Build outputs
+# Build outputs
 build/
 cmake-build-*/
 *.o
@@ -7,6 +7,8 @@ cmake-build-*/
 *.bin
 *.px4
 *.ulg
+*.log
+*.pid
 
 # Python
 __pycache__/
@@ -24,6 +26,10 @@ Thumbs.db
 # Local PX4 checkout, if kept beside this overlay
 PX4-Autopilot/
 px4/
+
+# Temporary and local build evidence
+tmp/
+artifacts/legacy_build_logs/
 
 # Downloaded archives
 *.zip

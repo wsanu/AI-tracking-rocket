@@ -1,9 +1,9 @@
-﻿param(
+param(
     [Parameter(Mandatory = $true)]
     [string]$Px4Root,
 
     [string[]]$BoardConfigs = @(
-        "boards\px4\fmu-v6x\default.px4board",
+        "boards\hkust\nxt-dual\default.px4board",
         "boards\px4\sitl\default.px4board"
     )
 )
@@ -29,9 +29,10 @@ if (-not (Test-Path $msgDir)) {
 }
 
 $sourceModule = Join-Path $repoRoot "px4_tracker_integration\src\modules\uart_tracker"
-$sourceMsg = Join-Path $repoRoot "px4_tracker_integration\msg\tracker_target.msg"
+$sourceMsg = Join-Path $repoRoot "px4_tracker_integration\msg\TrackerTarget.msg"
 $targetModule = Join-Path $modulesDir "uart_tracker"
-$targetMsg = Join-Path $msgDir "tracker_target.msg"
+$targetMsg = Join-Path $msgDir "TrackerTarget.msg"
+$msgCMakePath = Join-Path $msgDir "CMakeLists.txt"
 
 New-Item -ItemType Directory -Force -Path $targetModule | Out-Null
 Copy-Item -Recurse -Force (Join-Path $sourceModule "*") $targetModule
@@ -39,6 +40,15 @@ Copy-Item -Force $sourceMsg $targetMsg
 
 Write-Host "Installed uart_tracker module to $targetModule"
 Write-Host "Installed tracker_target uORB message to $targetMsg"
+$msgCMakeContent = Get-Content -Raw -LiteralPath $msgCMakePath
+
+if ($msgCMakeContent -notmatch "(?m)^\s*TrackerTarget\.msg\s*$") {
+    $msgCMakeContent = $msgCMakeContent -replace "(?m)^(\s*FollowTargetStatus\.msg\s*)$", "`$1`r`n`tTrackerTarget.msg"
+    [IO.File]::WriteAllText($msgCMakePath, $msgCMakeContent, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "Registered TrackerTarget.msg in msg\CMakeLists.txt"
+} else {
+    Write-Host "TrackerTarget.msg already registered in msg\CMakeLists.txt"
+}
 
 foreach ($boardConfig in $BoardConfigs) {
     $path = Join-Path $px4RootPath $boardConfig
@@ -63,6 +73,9 @@ foreach ($boardConfig in $BoardConfigs) {
         $content = $content.TrimEnd() + "`r`nCONFIG_MODULES_UART_TRACKER=y`r`n"
     }
 
-    Set-Content -LiteralPath $path -Value $content -NoNewline -Encoding UTF8
+    [IO.File]::WriteAllText($path, $content, (New-Object System.Text.UTF8Encoding($false)))
     Write-Host "Enabled CONFIG_MODULES_UART_TRACKER in $boardConfig"
 }
+
+# Install the additive TRACK flight-mode layer after the legacy UART overlay.
+& (Join-Path $PSScriptRoot "install_track_mode_overlay.ps1") -Px4Root $px4RootPath -BoardConfigs $BoardConfigs
