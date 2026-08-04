@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/PX4/PX4-Autopilot.git",
+  "commit": "99c40407ffd7ac184e2d7b4b293f36f10fe561ef",
+  "px4_version": "1.15.4",
+  "board_target": "hkust_nxt-dual_default",
+  "tested_os": "Ubuntu 22.04 / WSL2",
+  "tested_toolchain": "GNU Arm Embedded 10.3.1 20210621"
+}

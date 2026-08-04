@@ -1,6 +1,61 @@
 # PX4 慧眼目标跟踪与 TRACK 飞行模式
 
-本仓库用于把慧眼 V3.1 视觉模块的 UART 目标数据接入 PX4，并在自定义 `Track` 飞行模式中生成姿态设定值。当前版本已完成软件回归、固件编译、真实 UART 数据接收、模式切换，以及拆桨状态下四路电机差动输出验证；尚未完成带桨悬停、目标丢失、RC 丢失和实际跟踪飞行验证。
+本仓库提供一套可从源码复现的 PX4 1.15.4 目标指向飞行模式：慧眼/Viztra LE071通过UART发布目标方向，自定义 `track_control` 生成姿态设定值，继续使用PX4原生姿态、角速度和控制分配链路驱动四旋翼电机。
+
+当前完成状态：
+
+- Python与JavaScript协议回归测试通过。
+- `hkust_nxt-dual_default` 编译、链接和上板启动通过。
+- 真实慧眼UART数据解析通过，实测解析错误为0。
+- QGC可选择Track模式，`vehicle_status.nav_state=9`。
+- 拆桨状态下，目标移动能产生四路电机差动输出。
+- 尚未完成带桨Track飞行、目标长期丢失和RC丢失实飞验证。
+
+## 新用户从这里开始
+
+完整教程：[从零复现固件、接线和拆桨验收](docs/reproduction.md)
+
+```sh
+git clone https://github.com/wsanu/AI-tracking-rocket.git
+cd AI-tracking-rocket
+
+# 检查仓库
+python3 scripts/check_repository.py
+python3 -m unittest discover -s tests
+
+# 创建固定PX4工作树并安装覆盖层
+python3 scripts/reproduce_px4.py \
+  --px4-root ../PX4-Autopilot \
+  --clone
+
+# 安装PX4 NuttX工具链（完成后重开终端）
+cd ../PX4-Autopilot
+bash Tools/setup/ubuntu.sh --no-sim-tools
+
+# 编译HKUST NXT Dual固件
+make hkust_nxt-dual_default -j4
+```
+
+复现脚本固定PX4上游提交为：
+
+```text
+99c40407ffd7ac184e2d7b4b293f36f10fe561ef
+```
+
+固定信息保存在 [px4-base.json](reproducibility/px4-base.json)。不要使用任意最新PX4替代该提交。
+
+## 支持的已验证硬件
+
+| 组件 | 已验证型号/接口 |
+| --- | --- |
+| 飞控 | HKUST NXT Dual / NxtPX4v2，`HKUST_NXT_DUAL` |
+| PX4目标 | `hkust_nxt-dual_default` |
+| 视觉模块 | 慧眼 V3.1 / Viztra LE071 |
+| 视觉串口 | TELEM4 / UART8，`/dev/ttyS7`，115200 baud，3.3 V TTL |
+| 电调 | HK38203 V2.1，PWM1–PWM4 |
+| 接收机 | MicoAir LR24-F-mini V1.0，ELRS/CRSF |
+
+其他飞控可以进行SITL或移植研究，但不能视为已经过硬件验证。
 
 ## 数据链路
 
@@ -11,88 +66,64 @@
   -> track_control
   -> vehicle_attitude_setpoint
   -> mc_att_control / mc_rate_control / control_allocator
-  -> 四路电机
+  -> Motor 1..4
 ```
+
+TRACK不直接写电机输出，也不替换PX4原生PID和Control Allocation。
 
 ## 目录职责
 
-| 目录 | 用途 | 维护规则 |
-| --- | --- | --- |
-| `design_sourse/` | 用户说明、通讯协议、TRACK 设计报告 | 设计输入，只读保留，不改名 |
-| `px4_tracker_integration/` | PX4 消息、`uart_tracker`、`track_control` 覆盖层 | 本项目功能源码的唯一维护入口 |
-| `scripts/` | 覆盖层安装和目录校验脚本 | 修改后必须执行校验 |
-| `PX4-Autopilot/` | 本机 PX4 工作树 | 由覆盖层同步生成，不作为独立源码维护 |
-| `tools/` | 浏览器仪表板和测试辅助工具 | 与协议测试同步维护 |
-| `tests/` | Python 与 JavaScript 回归测试 | 修改协议或消息映射后运行 |
-| `docs/` | 架构、协议、TRACK 模式、维护说明和测试记录 | 与实现和实测结果同步更新 |
-| `firmware/` | 已验证固件归档 | 用 SHA-256 标识，不覆盖旧版本 |
-| `artifacts/` | 原始测试数据和非源码证据 | 不放入源码目录 |
-| `uart_example/` | 厂商示例 | 上游参考，只读保留 |
+| 目录 | 用途 |
+| --- | --- |
+| `reproducibility/` | PX4版本锁和TRACK项目参数 |
+| `scripts/reproduce_px4.py` | 跨平台克隆、固定版本和幂等覆盖安装 |
+| `px4_tracker_integration/` | UART、TRACK模块和uORB消息的维护源 |
+| `design_sourse/` | 用户说明、通信协议和TRACK设计报告，只读设计输入 |
+| `docs/` | 架构、协议、复现、硬件检查与测试记录 |
+| `tests/` | Python和JavaScript回归测试 |
+| `tools/` | 数据帧生成器和Web Serial仪表板 |
+| `uart_example/` | 厂商示例代码，只读参考 |
+| `firmware/` | 已验证固件文件名、大小和SHA-256清单 |
+| `artifacts/` | 结构化测试数据；本地日志默认不提交 |
 
-详细维护规则见 [工程维护说明](docs/maintenance.md)，本次验证结果见 [2026-08-04 TRACK 拆桨台架测试](docs/test_records/2026-08-04-track-bench.md)。
+## Windows PowerShell覆盖安装
 
-## 硬件接口
-
-慧眼模块接入 `TELEM4 / UART8`，PX4 设备为 `/dev/ttyS7`：
-
-```text
-模块 TX  -> UART8 RX
-模块 RX  -> UART8 TX（仅接收目标数据时可不接）
-模块 GND -> GND
-```
-
-只能接 3.3 V TTL UART，不能将 RS-232 电平直接接入飞控。
-
-## 同步与编译
-
-在 Windows PowerShell 仓库根目录执行：
+已经自行准备好固定版本PX4工作树时，可以使用：
 
 ```powershell
-.\scripts\install_px4_overlay.ps1
-.\scripts\install_track_mode_overlay.ps1
+.\scripts\install_px4_overlay.ps1 -Px4Root E:\path\to\PX4-Autopilot
 .\scripts\verify_layout.ps1
 ```
 
-在 WSL 中编译：
+`install_px4_overlay.ps1` 会自动安装UART层和TRACK层，不需要再次调用 `install_track_mode_overlay.ps1`。
+
+## 上板最小检查
+
+拆桨、固定机体后，在MAVLink Console执行：
 
 ```sh
-cd /home/wsanu/rocket_tracker/PX4-Autopilot
-make hkust_nxt-dual_default -j4
-```
-
-当前已验证固件 SHA-256 为 `ae7803cf7aa9c9dd6cf24f4757d237746d0691559259f6ab06bbcd33b7677432`。
-
-## 运行与检查
-
-当前板级默认参数可直接启动串口解析器：
-
-```sh
+ver all
+track_control status
 uart_tracker start
 uart_tracker status
-track_control status
 listener tracker_target -n 5
 listener vehicle_status -n 1
 listener track_status -n 5
+listener actuator_motors -n 20 -r 5
 ```
 
-已知限制：当前命令行长选项 `--width`、`--height`、`--hfov`、`--vfov` 会导致实例化失败，应先使用板级默认参数启动。退出 TRACK 后，`track_status` 可能保留最后一帧；判断当前模式应以 `vehicle_status.nav_state` 和消息时间戳为准。
+当前已知限制：
 
-`Track` 对应飞行模式编号 `16`。台架验证中使用 `COM_FLTMODE6=16`，实际映射以 QGroundControl 的通道监视器为准。不能在 TRACK 中直接解锁，应先在 Stabilized 或 Position 中完成检查和解锁，再按测试计划切换。
+- `uart_tracker start` 的长选项存在实例化问题，先使用板级默认参数启动。
+- 离开Track后 `track_status` 可能保留最后一帧；当前模式以 `vehicle_status.nav_state` 为准。
+- 当前固件FLASH使用率约98.39%，不要随意增加板级模块。
+- HK38203 V2.1电流采样比例需要针对实际硬件标定。
 
-## 自动测试
+## 安全文档
 
-```powershell
-python -m unittest discover -s tests
-node --test tests\test_dashboard_protocol.mjs
-node --test tests\test_dashboard_mavlink.mjs
-.\scripts\verify_layout.ps1
-```
+- [硬件接线与首次上电检查表](docs/hardware_checklist.md)
+- [TRACK模式设计与参数](docs/track_mode.md)
+- [2026-08-04拆桨台架测试记录](docs/test_records/2026-08-04-track-bench.md)
+- [工程维护说明](docs/maintenance.md)
 
-如果系统没有安装 Node.js，可使用 Codex 工作区依赖中附带的 Node 运行 JavaScript 测试。
-
-## 安全边界
-
-- 所有首次电机和控制链路测试必须拆桨并固定机体。
-- 台架差动输出通过只证明控制链路接通，不等同于飞行安全验证。
-- 上桨前必须完成传感器、机架、电源、遥控器、失控保护、电机顺序和旋向检查。
-- `COM_DISARM_PRFLT` 和 `COM_DISARM_LAND` 只能改变自动上锁等待时间，不能替代安全检查。
+所有首次电机和控制链测试必须拆桨。台架输出通过只证明链路接通，不代表具备安全飞行条件。
