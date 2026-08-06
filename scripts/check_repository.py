@@ -16,6 +16,7 @@ REQUIRED = (
     "docs/track_mode.md",
     "docs/uart_protocol.md",
     "reproducibility/px4-base.json",
+    "reproducibility/module-build-selection.json",
     "reproducibility/track-parameters.nsh",
     "scripts/reproduce_px4.py",
     "px4_tracker_integration/msg/TrackerTarget.msg",
@@ -52,6 +53,16 @@ def main():
                 errors.append("unexpected PX4 board target")
         except (ValueError, OSError) as error:
             errors.append("invalid px4-base.json: {}".format(error))
+
+    selection_path = ROOT / "reproducibility" / "module-build-selection.json"
+    if selection_path.is_file():
+        try:
+            selection = json.loads(selection_path.read_text(encoding="utf-8"))
+            overlap = set(selection.get("enabled", ())) & set(selection.get("disabled", ()))
+            if overlap:
+                errors.append("module build selection has conflicting entries")
+        except (ValueError, OSError) as error:
+            errors.append("invalid module-build-selection.json: {}".format(error))
 
     old_message = ROOT / "px4_tracker_integration" / "msg" / "tracker_target.msg"
     if old_message.exists():

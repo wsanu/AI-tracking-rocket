@@ -1,4 +1,4 @@
-﻿import struct
+import struct
 import sys
 import unittest
 from pathlib import Path
@@ -6,13 +6,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from make_tracker_frame import checksum8, make_feedback_frame, make_miss_distance_frame
+from make_tracker_frame import checksum8, make_command_frame, make_feedback_frame, make_miss_distance_frame
 
 
 class TrackerProtocolTest(unittest.TestCase):
     def test_checksum_matches_vendor_example(self):
         frame_without_checksum_end = bytes.fromhex("58 07 01 03 00 00 59")
         self.assertEqual(checksum8(frame_without_checksum_end[2:-2]), 0x04)
+
+    def test_make_device_info_command_frame(self):
+        frame = make_command_frame(0x01, 0x04)
+        self.assertEqual(frame, bytes.fromhex("58 07 01 04 00 05 59"))
+
+    def test_make_track_command_frame(self):
+        payload = struct.pack("<BBHHHH", 1, 0, 960, 540, 100, 100)
+        frame = make_command_frame(0x03, 0x11, payload)
+        self.assertEqual(frame[:5], bytes([0x58, 0x07, 0x03, 0x11, 10]))
+        self.assertEqual(frame[5:-2], payload)
+        self.assertEqual(frame[-2], checksum8(frame[2:-2]))
+        self.assertEqual(frame[-1], 0x59)
 
     def test_make_miss_distance_frame_layout(self):
         frame = make_miss_distance_frame(

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "board_config": "boards/hkust/nxt-dual/default.px4board",
+  "scope": "Flight-control modules for the TRACK multicopter firmware",
+  "enabled": [
+    "CONFIG_MODULES_COMMANDER",
+    "CONFIG_MODULES_CONTROL_ALLOCATOR",
+    "CONFIG_MODULES_MANUAL_CONTROL",
+    "CONFIG_MODULES_MC_ATT_CONTROL",
+    "CONFIG_MODULES_MC_POS_CONTROL",
+    "CONFIG_MODULES_MC_RATE_CONTROL",
+    "CONFIG_MODULES_TRACK_CONTROL",
+    "CONFIG_MODULES_UART_TRACKER"
+  ],
+  "disabled": [
+    "CONFIG_MODULES_FW_ATT_CONTROL",
+    "CONFIG_MODULES_FW_AUTOTUNE_ATTITUDE_CONTROL",
+    "CONFIG_MODULES_FW_POS_CONTROL",
+    "CONFIG_MODULES_FW_RATE_CONTROL",
+    "CONFIG_MODULES_ROVER_POS_CONTROL",
+    "CONFIG_MODULES_VTOL_ATT_CONTROL"
+  ],
+  "notes": [
+    "TRACK runs on the multicopter attitude/rate/control-allocation chain.",
+    "Multicopter position control remains compiled as an optional failover mode.",
+    "A disabled entry is removed from the board .px4board file and is therefore not compiled."
+  ]
+}

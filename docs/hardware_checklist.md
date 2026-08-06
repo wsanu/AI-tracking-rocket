@@ -10,7 +10,7 @@
 - [ ] `PWM1`–`PWM4` 与QGC Actuators中的Motor 1–4一致。
 - [ ] `Current`只接电调电流采样输出，比例尚未确认时不用于判断安全余量。
 - [ ] 接收机供电电压符合LR24-F-mini规格，共地，TX接飞控RX。
-- [ ] 慧眼模块为3.3 V TTL UART，共地，TX接TELEM4/UART8 RX。
+- [ ] 慧眼模块为3.3 V TTL UART，共地，TX接UART3（USART3） RX，RX接UART3 TX。
 - [ ] 没有把5 V、VBAT或RS-232电平接到UART信号脚。
 - [ ] USB线和动力电池不会拉扯插头或造成机体移动。
 

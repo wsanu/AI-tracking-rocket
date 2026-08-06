@@ -55,7 +55,7 @@ uart_tracker status
 uart_tracker start
 ```
 
-板级默认设备是 `/dev/ttyS7`，115200 baud，默认图像1280×720、HFOV 62°、VFOV 48°。当前长选项存在已知实例化问题，不要使用带 `--width/--height/--hfov/--vfov` 的启动命令。
+板级默认设备是 `/dev/ttyS2`，115200 baud，默认图像1280×720、HFOV 62°、VFOV 48°。当前长选项存在已知实例化问题，不要使用带 `--width/--height/--hfov/--vfov` 的启动命令。
 
 将一个 `COM_FLTMODE*` 设置为16。在Stabilized或Altitude/Position模式完成检查和解锁，再切换到Track；不能直接在Track中解锁。
 

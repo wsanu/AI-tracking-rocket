@@ -116,12 +116,44 @@ PX4 模块会从当前报文目标中选择置信度最高的目标，按 `x/y/w
 
 PX4 模块会在 `uart_tracker status` 中显示心跳数量、最后心跳计数和最后自检码。
 
+## PX4发送指令
+
+`uart_tracker` 必须先启动，并以读写模式打开UART3：
+
+```sh
+uart_tracker start
+uart_tracker send info
+```
+
+当前支持的慧眼V3.1命名指令：
+
+| PX4命令 | 功能 |
+| --- | --- |
+| `uart_tracker send info` | 查询设备信息 |
+| `uart_tracker send check` | 设备自检 |
+| `uart_tracker send reboot` | 重启设备 |
+| `uart_tracker send time <年> <月> <日> <时> <分> <秒> [NTP]` | 设置系统时间 |
+| `uart_tracker send switch <0/1>` | 切换可见光/红外通道 |
+| `uart_tracker send pip <0/1>` | 控制画中画 |
+| `uart_tracker send capture` | 拍照 |
+| `uart_tracker send record <0/1>` | 开始/停止录像 |
+| `uart_tracker send file <操作>` | 文件操作 |
+| `uart_tracker send zoom <0/1> <倍率>` | 电子变倍 |
+| `uart_tracker send detect <0/1/2>` | 目标检测控制 |
+| `uart_tracker send autolock <模式> <策略>` | 自动锁定控制 |
+| `uart_tracker send track <模式> <目标ID> <x> <y> <w> <h>` | 跟踪控制 |
+| `uart_tracker send cross <x> <y>` | 设置十字位置 |
+| `uart_tracker send color <R> <G> <B>` | 设置OSD颜色 |
+| `uart_tracker send text <行号> "<文字>"` | 显示自定义文字 |
+
+发送帧为 `58 07 CMD0 CMD1 LEN DATA CHK 59`。模块会继续在同一串口解析反馈帧；`uart_tracker status` 显示发送次数、错误次数、响应次数及最后命令字。发送功能要求慧眼RX连接飞控UART3 TX。
+
 ## UART 信息转换为动作
 
 `uart_tracker` 现在支持把有效的 `00 81` 测偏数据转换为 PX4 云台动作输出。默认仍然是只解析和发布 `tracker_target`，不会输出动作；需要显式启用：
 
 ```sh
-uart_tracker start -d /dev/ttyS7 -b 115200 --width 1280 --height 720 --hfov 62 --vfov 48 --action gimbal
+uart_tracker start -d /dev/ttyS2 -b 115200 --width 1280 --height 720 --hfov 62 --vfov 48 --action gimbal
 ```
 
 动作输出话题：`gimbal_manager_set_manual_control`
@@ -136,7 +168,7 @@ uart_tracker start -d /dev/ttyS7 -b 115200 --width 1280 --height 720 --hfov 62 -
 示例：
 
 ```sh
-uart_tracker start -d /dev/ttyS7 -b 115200 --action gimbal --action-gain 0.7 --deadband-deg 1.0
+uart_tracker start -d /dev/ttyS2 -b 115200 --action gimbal --action-gain 0.7 --deadband-deg 1.0
 listener gimbal_manager_set_manual_control
 ```
 
