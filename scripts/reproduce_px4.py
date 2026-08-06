@@ -16,12 +16,17 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCK_PATH = REPO_ROOT / "reproducibility" / "px4-base.json"
+MODULE_SELECTION_PATH = REPO_ROOT / "reproducibility" / "module-build-selection.json"
 
 
 def load_lock():
     with LOCK_PATH.open("r", encoding="utf-8") as stream:
         return json.load(stream)
 
+
+def load_module_selection():
+    with MODULE_SELECTION_PATH.open("r", encoding="utf-8") as stream:
+        return json.load(stream)
 
 def run(command, cwd=None):
     print("+", " ".join(str(part) for part in command))
@@ -91,6 +96,41 @@ def enable_board_module(path, module, preferred_anchors):
     write_text(path, content)
     print("Enabled board module:", setting)
 
+
+def set_board_config(path, setting, enabled):
+    if not path.is_file():
+        raise RuntimeError("Missing module-selection board config: {}".format(path))
+
+    enabled_line = "{}=y".format(setting)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = [line for line in lines if line.strip() != enabled_line]
+
+    if enabled:
+        lines.append(enabled_line)
+
+    write_text(path, "\n".join(lines).rstrip() + "\n")
+    print("{} board module: {}".format("Enabled" if enabled else "Disabled", setting))
+
+
+def apply_module_selection(px4_root, selection):
+    path = px4_root / selection["board_config"]
+    for setting in selection["enabled"]:
+        set_board_config(path, setting, True)
+    for setting in selection["disabled"]:
+        set_board_config(path, setting, False)
+
+
+def verify_module_selection(px4_root, selection):
+    path = px4_root / selection["board_config"]
+    settings = {line.strip() for line in path.read_text(encoding="utf-8").splitlines()}
+
+    for setting in selection["enabled"]:
+        if "{}=y".format(setting) not in settings:
+            raise RuntimeError("Module selection did not enable {}".format(setting))
+
+    for setting in selection["disabled"]:
+        if "{}=y".format(setting) in settings:
+            raise RuntimeError("Module selection did not disable {}".format(setting))
 
 def copy_overlay(px4_root):
     modules = REPO_ROOT / "px4_tracker_integration" / "src" / "modules"
@@ -215,7 +255,7 @@ def configure_boards(px4_root, board_configs):
             print("Enabled track_control startup:", extras)
 
 
-def verify_overlay(px4_root, lock, board_configs):
+def verify_overlay(px4_root, lock, board_configs, module_selection):
     expected_files = (
         "msg/TrackerTarget.msg",
         "msg/TrackStatus.msg",
@@ -243,6 +283,8 @@ def verify_overlay(px4_root, lock, board_configs):
             for setting in ("CONFIG_MODULES_UART_TRACKER=y", "CONFIG_MODULES_TRACK_CONTROL=y"):
                 if setting not in content:
                     raise RuntimeError("Missing {} in {}".format(setting, relative))
+
+    verify_module_selection(px4_root, module_selection)
 
     head = git_output(px4_root, "rev-parse", "HEAD")
     if head != lock["commit"]:
@@ -296,6 +338,7 @@ def parse_args():
 def main():
     args = parse_args()
     lock = load_lock()
+    module_selection = load_module_selection()
     px4_root = args.px4_root.expanduser().resolve()
     board_configs = args.board_configs or [
         "boards/hkust/nxt-dual/default.px4board",
@@ -305,14 +348,15 @@ def main():
     if args.verify_only:
         if not px4_root.exists():
             raise RuntimeError("PX4 root does not exist: {}".format(px4_root))
-        verify_overlay(px4_root, lock, board_configs)
+        verify_overlay(px4_root, lock, board_configs, module_selection)
         return
 
     prepare_checkout(px4_root, lock, args.clone, not args.skip_submodules)
     copy_overlay(px4_root)
     apply_track_patches(px4_root)
     configure_boards(px4_root, board_configs)
-    verify_overlay(px4_root, lock, board_configs)
+    apply_module_selection(px4_root, module_selection)
+    verify_overlay(px4_root, lock, board_configs, module_selection)
     print("Next: cd {} && make {} -j4".format(px4_root, lock["board_target"]))
 
 

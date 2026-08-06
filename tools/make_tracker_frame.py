@@ -1,8 +1,10 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 import argparse
 import struct
 
 
+COMMAND_HEAD = bytes([0x58, 0x07])
+COMMAND_END = 0x59
 FEEDBACK_HEAD = bytes([0x78, 0x07])
 FEEDBACK_END = 0x79
 CMD_PERIODIC = 0x00
@@ -12,6 +14,13 @@ CMD_MISS_DISTANCE = 0x81
 def checksum8(data: bytes) -> int:
     return sum(data) & 0xFF
 
+
+def make_command_frame(cmd0: int, cmd1: int, payload: bytes = b"") -> bytes:
+    if len(payload) > 255:
+        raise ValueError("payload too long")
+
+    body = bytes([cmd0, cmd1, len(payload)]) + payload
+    return COMMAND_HEAD + body + bytes([checksum8(body), COMMAND_END])
 
 def make_feedback_frame(cmd0: int, cmd1: int, payload: bytes) -> bytes:
     if len(payload) > 255:

@@ -57,4 +57,21 @@ foreach ($boardConfig in $BoardConfigs) {
         [IO.File]::WriteAllText($path, $content, $utf8NoBom)
     }
 }
+$moduleSelectionPath = Join-Path $repoRoot "reproducibility\module-build-selection.json"
+$moduleSelection = Get-Content -Raw -Encoding utf8 -LiteralPath $moduleSelectionPath | ConvertFrom-Json
+$selectionBoardPath = Join-Path $px4RootPath ($moduleSelection.board_config -replace '/', '\')
+if (-not (Test-Path -LiteralPath $selectionBoardPath)) { throw "Missing module-selection board config: $selectionBoardPath" }
+$selectionContent = [IO.File]::ReadAllText($selectionBoardPath)
+foreach ($setting in $moduleSelection.enabled) {
+    $line = "$setting=y"
+    if ($selectionContent -notmatch "(?m)^$([regex]::Escape($line))$") {
+        $selectionContent = $selectionContent.TrimEnd() + "`r`n$line`r`n"
+    }
+}
+foreach ($setting in $moduleSelection.disabled) {
+    $line = "$setting=y"
+    $selectionContent = [regex]::Replace($selectionContent, "(?m)^$([regex]::Escape($line))\r?\n?", "")
+}
+[IO.File]::WriteAllText($selectionBoardPath, $selectionContent.TrimEnd() + "`r`n", $utf8NoBom)
+Write-Host "Applied module build selection from $moduleSelectionPath"
 Write-Host "Installed TRACK mode overlay to $px4RootPath"

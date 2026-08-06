@@ -14,7 +14,7 @@
 | 主机环境 | Ubuntu 22.04 或 Windows 10/11 + WSL2 Ubuntu 22.04 |
 | 已验证编译器 | GNU Arm Embedded 10.3.1 20210621 |
 | 视觉模块 | Viztra LE071 / 慧眼 V3.1 UART 协议 |
-| 视觉串口 | TELEM4 / UART8，PX4 `/dev/ttyS7`，115200 baud |
+| 视觉串口 | UART3（USART3），PX4 `/dev/ttyS2`，115200 baud |
 | 电调 | HK38203 V2.1，四路电机输出 |
 | 遥控链路 | MicoAir LR24-F-mini V1.0，ELRS/CRSF |
 
@@ -165,8 +165,8 @@ PX4 version: 1.15.4
 视觉模块使用3.3 V TTL UART：
 
 ```text
-慧眼 TX  -> 飞控 TELEM4/UART8 RX
-慧眼 RX  -> 飞控 TELEM4/UART8 TX（当前只接收时可不接）
+慧眼 TX  -> 飞控 UART3（USART3） RX
+慧眼 RX  -> 飞控 UART3（USART3） TX（发送控制指令时必须连接）
 慧眼 GND -> 飞控 GND
 ```
 
@@ -210,7 +210,7 @@ uart_tracker status
 uart_tracker start
 ```
 
-当前版本使用板级默认设备 `/dev/ttyS7`、115200 baud和1280×720视场参数。不要使用已知有问题的 `--width/--height/--hfov/--vfov` 长选项启动。
+当前版本使用板级默认设备 `/dev/ttyS2`、115200 baud和1280×720视场参数。不要使用已知有问题的 `--width/--height/--hfov/--vfov` 长选项启动。
 
 按顺序验收：
 

@@ -56,6 +56,9 @@ private:
 	static constexpr uint8_t kFeedbackHead0 = 0x78;
 	static constexpr uint8_t kFeedbackHead1 = 0x07;
 	static constexpr uint8_t kFeedbackEnd = 0x79;
+	static constexpr uint8_t kCommandHead0 = 0x58;
+	static constexpr uint8_t kCommandHead1 = 0x07;
+	static constexpr uint8_t kCommandEnd = 0x59;
 	static constexpr uint8_t kPeriodicCmd = 0x00;
 	static constexpr uint8_t kMissDistanceCmd = 0x81;
 	static constexpr uint8_t kDetectionCmd = 0x82;
@@ -71,6 +74,9 @@ private:
 	bool open_uart();
 	void close_uart();
 	bool configure_uart();
+	int send_command(int argc, char *argv[]);
+	int send_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, uint8_t length);
+	void handle_command_response(uint8_t cmd0, uint8_t cmd1, uint8_t length);
 	void parse_byte(uint8_t byte);
 	void handle_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, uint8_t length);
 	bool decode_miss_distance_payload(const uint8_t *payload, uint8_t length, DecodedTarget &target);
@@ -81,6 +87,8 @@ private:
 	void check_action_timeout();
 
 	static uint8_t checksum8(const uint8_t *data, uint16_t length);
+	static bool parse_u32_arg(const char *text, uint32_t maximum, uint32_t &value);
+	static void write_u16_le(uint8_t *data, uint16_t value);
 	static uint16_t read_u16_le(const uint8_t *data);
 	static int32_t read_i32_le(const uint8_t *data);
 	static uint32_t read_u32_le(const uint8_t *data);
@@ -119,6 +127,14 @@ private:
 	uint8_t _last_detection_current_targets{0};
 	uint64_t _last_target_frame_timestamp{0};
 	uint32_t _action_timeout_count{0};
+	uint32_t _command_send_count{0};
+	uint32_t _command_send_error_count{0};
+	uint32_t _command_response_count{0};
+	uint8_t _last_command_cmd0{0};
+	uint8_t _last_command_cmd1{0};
+	uint8_t _last_response_cmd0{0};
+	uint8_t _last_response_cmd1{0};
+	bool _command_response_pending{false};
 	bool _action_timeout_triggered{false};
 
 	uORB::Publication<tracker_target_s> _tracker_target_pub{ORB_ID(tracker_target)};

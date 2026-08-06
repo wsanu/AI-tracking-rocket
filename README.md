@@ -51,7 +51,7 @@ make hkust_nxt-dual_default -j4
 | 飞控 | HKUST NXT Dual / NxtPX4v2，`HKUST_NXT_DUAL` |
 | PX4目标 | `hkust_nxt-dual_default` |
 | 视觉模块 | 慧眼 V3.1 / Viztra LE071 |
-| 视觉串口 | TELEM4 / UART8，`/dev/ttyS7`，115200 baud，3.3 V TTL |
+| 视觉串口 | UART3（USART3），`/dev/ttyS2`，115200 baud，3.3 V TTL |
 | 电调 | HK38203 V2.1，PWM1–PWM4 |
 | 接收机 | MicoAir LR24-F-mini V1.0，ELRS/CRSF |
 

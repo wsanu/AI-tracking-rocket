@@ -56,7 +56,7 @@ int UartTracker::task_spawn(int argc, char *argv[])
 
 UartTracker *UartTracker::instantiate(int argc, char *argv[])
 {
-	const char *device = "/dev/ttyS7";
+	const char *device = "/dev/ttyS2";
 	int baudrate = 115200;
 	uint16_t image_width = 1280;
 	uint16_t image_height = 720;
@@ -130,7 +130,185 @@ UartTracker *UartTracker::instantiate(int argc, char *argv[])
 
 int UartTracker::custom_command(int argc, char *argv[])
 {
+	if (argc > 0 && !strcmp(argv[0], "send")) {
+		if (!is_running() || _object.load() == nullptr) {
+			PX4_ERR("start uart_tracker before sending commands");
+			return PX4_ERROR;
+		}
+
+		return _object.load()->send_command(argc - 1, argv + 1);
+	}
+
 	return print_usage("unknown command");
+}
+
+bool UartTracker::parse_u32_arg(const char *text, uint32_t maximum, uint32_t &value)
+{
+	if (text == nullptr || text[0] == '\0') {
+		return false;
+	}
+
+	char *end = nullptr;
+	errno = 0;
+	const unsigned long parsed = strtoul(text, &end, 0);
+
+	if (errno != 0 || end == text || *end != '\0' || parsed > maximum) {
+		return false;
+	}
+
+	value = (uint32_t)parsed;
+	return true;
+}
+
+void UartTracker::write_u16_le(uint8_t *data, uint16_t value)
+{
+	data[0] = (uint8_t)(value & 0xff);
+	data[1] = (uint8_t)(value >> 8);
+}
+
+int UartTracker::send_command(int argc, char *argv[])
+{
+	if (argc < 1) {
+		PX4_ERR("missing command name");
+		return PX4_ERROR;
+	}
+
+	const char *command = argv[0];
+	uint8_t payload[kMaxPayloadLength]{};
+	uint32_t value[7]{};
+	auto parse = [&](int index, uint32_t maximum, int destination) {
+		return index < argc && parse_u32_arg(argv[index], maximum, value[destination]);
+	};
+
+	if (!strcmp(command, "info")) { return send_frame(0x01, 0x04, nullptr, 0); }
+	if (!strcmp(command, "check")) { return send_frame(0x01, 0x03, nullptr, 0); }
+	if (!strcmp(command, "reboot")) { return send_frame(0x01, 0x05, nullptr, 0); }
+
+	if (!strcmp(command, "time") && argc >= 7
+	    && parse(1, UINT16_MAX, 0) && parse(2, 12, 1) && parse(3, 31, 2)
+	    && parse(4, 23, 3) && parse(5, 59, 4) && parse(6, 59, 5)
+	    && (argc < 8 || parse(7, 1, 6))) {
+		write_u16_le(&payload[0], (uint16_t)value[0]);
+		payload[2] = (uint8_t)value[1]; payload[3] = (uint8_t)value[2];
+		payload[4] = (uint8_t)value[3]; payload[5] = (uint8_t)value[4];
+		payload[6] = (uint8_t)value[5]; payload[7] = argc >= 8 ? (uint8_t)value[6] : 0;
+		return send_frame(0x01, 0x01, payload, 8);
+	}
+
+	if (!strcmp(command, "switch") && parse(1, 1, 0)) {
+		payload[0] = (uint8_t)value[0]; return send_frame(0x02, 0x01, payload, 2);
+	}
+
+	if (!strcmp(command, "pip") && parse(1, 1, 0)) {
+		payload[0] = (uint8_t)value[0]; return send_frame(0x02, 0x02, payload, 2);
+	}
+
+	if (!strcmp(command, "capture")) { return send_frame(0x02, 0x11, payload, 2); }
+
+	if (!strcmp(command, "record") && parse(1, 1, 0)) {
+		payload[0] = (uint8_t)value[0]; return send_frame(0x02, 0x12, payload, 2);
+	}
+
+	if (!strcmp(command, "file") && parse(1, UINT8_MAX, 0)) {
+		payload[0] = (uint8_t)value[0]; return send_frame(0x02, 0x13, payload, 2);
+	}
+
+	if (!strcmp(command, "zoom") && parse(1, 1, 0) && parse(2, UINT8_MAX, 1)) {
+		payload[0] = (uint8_t)value[0]; payload[1] = (uint8_t)value[1];
+		return send_frame(0x02, 0x21, payload, 2);
+	}
+
+	if (!strcmp(command, "detect") && parse(1, 2, 0)) {
+		payload[0] = (uint8_t)value[0]; return send_frame(0x03, 0x01, payload, 2);
+	}
+
+	if (!strcmp(command, "autolock") && parse(1, 2, 0) && parse(2, 1, 1)) {
+		payload[0] = (uint8_t)value[0]; payload[1] = (uint8_t)value[1];
+		return send_frame(0x03, 0x05, payload, 4);
+	}
+
+	if (!strcmp(command, "track") && argc >= 7
+	    && parse(1, 3, 0) && parse(2, UINT8_MAX, 1)
+	    && parse(3, UINT16_MAX, 2) && parse(4, UINT16_MAX, 3)
+	    && parse(5, UINT16_MAX, 4) && parse(6, UINT16_MAX, 5)) {
+		payload[0] = (uint8_t)value[0]; payload[1] = (uint8_t)value[1];
+		write_u16_le(&payload[2], (uint16_t)value[2]); write_u16_le(&payload[4], (uint16_t)value[3]);
+		write_u16_le(&payload[6], (uint16_t)value[4]); write_u16_le(&payload[8], (uint16_t)value[5]);
+		return send_frame(0x03, 0x11, payload, 10);
+	}
+
+	if (!strcmp(command, "cross") && parse(1, UINT16_MAX, 0) && parse(2, UINT16_MAX, 1)) {
+		payload[0] = 0x03; write_u16_le(&payload[1], (uint16_t)value[0]);
+		write_u16_le(&payload[3], (uint16_t)value[1]); return send_frame(0x03, 0x1a, payload, 5);
+	}
+
+	if (!strcmp(command, "color") && parse(1, UINT8_MAX, 0) && parse(2, UINT8_MAX, 1)
+	    && parse(3, UINT8_MAX, 2)) {
+		payload[0] = 1; payload[1] = (uint8_t)value[0];
+		payload[2] = (uint8_t)value[1]; payload[3] = (uint8_t)value[2];
+		return send_frame(0x04, 0x04, payload, 4);
+	}
+
+	if (!strcmp(command, "text") && argc >= 3 && parse(1, 3, 0)) {
+		const size_t text_length = strnlen(argv[2], 129);
+
+		if (text_length <= 128) {
+			payload[0] = (uint8_t)value[0]; payload[1] = (uint8_t)text_length;
+			memcpy(&payload[2], argv[2], text_length);
+			return send_frame(0x00, 0x02, payload, (uint8_t)(text_length + 2));
+		}
+	}
+
+	PX4_ERR("invalid send command or arguments: %s", command);
+	return PX4_ERROR;
+}
+
+int UartTracker::send_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, uint8_t length)
+{
+	if (_fd < 0) {
+		PX4_ERR("UART is not open");
+		return PX4_ERROR;
+	}
+
+	uint8_t frame[kMaxPayloadLength + 7]{};
+	frame[0] = kCommandHead0; frame[1] = kCommandHead1;
+	frame[2] = cmd0; frame[3] = cmd1; frame[4] = length;
+
+	if (payload != nullptr && length > 0) { memcpy(&frame[5], payload, length); }
+
+	frame[5 + length] = checksum8(&frame[2], (uint16_t)length + 3);
+	frame[6 + length] = kCommandEnd;
+	const size_t frame_length = (size_t)length + 7;
+	size_t offset = 0;
+
+	while (offset < frame_length) {
+		const ssize_t written = ::write(_fd, &frame[offset], frame_length - offset);
+
+		if (written > 0) { offset += (size_t)written; continue; }
+
+		if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+			pollfd output{}; output.fd = _fd; output.events = POLLOUT;
+			if (px4_poll(&output, 1, 100) > 0) { continue; }
+		}
+
+		_command_send_error_count++;
+		PX4_ERR("UART command write failed (%i)", errno);
+		return PX4_ERROR;
+	}
+
+	_command_send_count++;
+	_last_command_cmd0 = cmd0; _last_command_cmd1 = cmd1;
+	_command_response_pending = true;
+	PX4_INFO("sent command %02x %02x (%u payload bytes)", cmd0, cmd1, (unsigned)length);
+	return PX4_OK;
+}
+
+void UartTracker::handle_command_response(uint8_t cmd0, uint8_t cmd1, uint8_t length)
+{
+	_command_response_count++;
+	_last_response_cmd0 = cmd0; _last_response_cmd1 = cmd1;
+	_command_response_pending = false;
+	PX4_INFO("command response %02x %02x (%u payload bytes)", cmd0, cmd1, (unsigned)length);
 }
 
 int UartTracker::print_usage(const char *reason)
@@ -147,7 +325,7 @@ Read Huiyan V3.1 tracking feedback frames from UART and publish tracker_target.
 
 	PRINT_MODULE_USAGE_NAME("uart_tracker", "module");
 	PRINT_MODULE_USAGE_COMMAND("start");
-	PRINT_MODULE_USAGE_PARAM_STRING('d', "/dev/ttyS7", nullptr, "UART device", false);
+	PRINT_MODULE_USAGE_PARAM_STRING('d', "/dev/ttyS2", nullptr, "UART device", false);
 	PRINT_MODULE_USAGE_PARAM_INT('b', 115200, 9600, 921600, "UART baudrate", true);
 	PRINT_MODULE_USAGE_ARG("--width <px>", "video output width", true);
 	PRINT_MODULE_USAGE_ARG("--height <px>", "video output height", true);
@@ -156,6 +334,7 @@ Read Huiyan V3.1 tracking feedback frames from UART and publish tracker_target.
 	PRINT_MODULE_USAGE_ARG("--action <none|gimbal>", "convert valid UART target frames into an action output", true);
 	PRINT_MODULE_USAGE_ARG("--action-gain <value>", "gimbal action gain before clamping to -1..1", true);
 	PRINT_MODULE_USAGE_ARG("--deadband-deg <deg>", "ignore target bearing error below this angle", true);
+	PRINT_MODULE_USAGE_COMMAND_DESCR("send <command> [args]", "send a Huiyan V3.1 command frame; see docs/uart_protocol.md");
 	PRINT_MODULE_USAGE_COMMAND("stop");
 	PRINT_MODULE_USAGE_COMMAND("status");
 	return PX4_OK;
@@ -172,6 +351,11 @@ int UartTracker::print_status()
 	PX4_INFO("gimbal action: %s, gain: %.2f, deadband: %.4f rad", _gimbal_action_enabled ? "on" : "off",
 		 (double)_action_gain, (double)_action_deadband_rad);
 	PX4_INFO("action timeout: 500 ms, count: %" PRIu32, _action_timeout_count);
+	PX4_INFO("commands: sent %" PRIu32 ", errors %" PRIu32 ", responses %" PRIu32,
+		 _command_send_count, _command_send_error_count, _command_response_count);
+	PX4_INFO("last command: %02x %02x, last response: %02x %02x, pending: %s",
+		 _last_command_cmd0, _last_command_cmd1, _last_response_cmd0, _last_response_cmd1,
+		 _command_response_pending ? "yes" : "no");
 	return PX4_OK;
 }
 
@@ -218,7 +402,7 @@ void UartTracker::run()
 
 bool UartTracker::open_uart()
 {
-	_fd = ::open(_device, O_RDONLY | O_NOCTTY | O_NONBLOCK);
+	_fd = ::open(_device, O_RDWR | O_NOCTTY | O_NONBLOCK);
 
 	if (_fd < 0) {
 		PX4_ERR("open %s failed", _device);
@@ -353,7 +537,11 @@ void UartTracker::parse_byte(uint8_t byte)
 
 void UartTracker::handle_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, uint8_t length)
 {
-	if (cmd0 != kPeriodicCmd) {
+	const uint8_t expected_response_cmd1 = (uint8_t)(_last_command_cmd1 | 0x80);
+
+	if ((_command_response_pending && cmd0 == _last_command_cmd0 && cmd1 == expected_response_cmd1)
+	    || cmd0 != kPeriodicCmd) {
+		handle_command_response(cmd0, cmd1, length);
 		return;
 	}
 
