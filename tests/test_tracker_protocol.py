@@ -26,6 +26,27 @@ class TrackerProtocolTest(unittest.TestCase):
         self.assertEqual(frame[-2], checksum8(frame[2:-2]))
         self.assertEqual(frame[-1], 0x59)
 
+    def test_uart_write_runs_in_module_task(self):
+        source_path = (
+            Path(__file__).resolve().parents[1]
+            / "px4_tracker_integration"
+            / "src"
+            / "modules"
+            / "uart_tracker"
+            / "UartTracker.cpp"
+        )
+        source = source_path.read_text(encoding="utf-8")
+        queue_start = source.index("int UartTracker::send_frame")
+        worker_start = source.index("void UartTracker::process_pending_command")
+        timeout_start = source.index("void UartTracker::check_command_response_timeout")
+        run_start = source.index("void UartTracker::run()")
+        open_start = source.index("bool UartTracker::open_uart()")
+
+        self.assertNotIn("::write(_fd", source[queue_start:worker_start])
+        self.assertIn("_command_queued = true", source[queue_start:worker_start])
+        self.assertIn("::write(_fd", source[worker_start:timeout_start])
+        self.assertIn("process_pending_command();", source[run_start:open_start])
+
     def test_make_miss_distance_frame_layout(self):
         frame = make_miss_distance_frame(
             offset_x=25,

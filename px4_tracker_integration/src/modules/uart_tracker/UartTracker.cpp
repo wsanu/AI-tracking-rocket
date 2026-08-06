@@ -30,11 +30,13 @@ UartTracker::UartTracker(const char *device, int baudrate, uint16_t image_width,
 	_action_deadband_rad(action_deadband_rad)
 {
 	strncpy(_device, device, sizeof(_device) - 1);
+	pthread_mutex_init(&_command_mutex, nullptr);
 }
 
 UartTracker::~UartTracker()
 {
 	close_uart();
+	pthread_mutex_destroy(&_command_mutex);
 }
 
 int UartTracker::task_spawn(int argc, char *argv[])
@@ -270,7 +272,7 @@ int UartTracker::send_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, 
 		return PX4_ERROR;
 	}
 
-	uint8_t frame[kMaxPayloadLength + 7]{};
+	uint8_t frame[kMaxCommandFrameLength]{};
 	frame[0] = kCommandHead0; frame[1] = kCommandHead1;
 	frame[2] = cmd0; frame[3] = cmd1; frame[4] = length;
 
@@ -279,38 +281,120 @@ int UartTracker::send_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, 
 	frame[5 + length] = checksum8(&frame[2], (uint16_t)length + 3);
 	frame[6 + length] = kCommandEnd;
 	const size_t frame_length = (size_t)length + 7;
+	pthread_mutex_lock(&_command_mutex);
+
+	if (_command_busy) {
+		pthread_mutex_unlock(&_command_mutex);
+		PX4_ERR("a UART command is already pending");
+		return PX4_ERROR;
+	}
+
+	memcpy(_pending_command_frame, frame, frame_length);
+	_pending_command_frame_length = frame_length;
+	_pending_command_cmd0 = cmd0;
+	_pending_command_cmd1 = cmd1;
+	_command_queued = true;
+	_command_busy = true;
+	pthread_mutex_unlock(&_command_mutex);
+	PX4_INFO("queued command %02x %02x (%u payload bytes)", cmd0, cmd1, (unsigned)length);
+	return PX4_OK;
+}
+
+void UartTracker::process_pending_command()
+{
+	uint8_t frame[kMaxCommandFrameLength]{};
+	size_t frame_length = 0;
+	uint8_t cmd0 = 0;
+	uint8_t cmd1 = 0;
+	pthread_mutex_lock(&_command_mutex);
+
+	if (_command_queued) {
+		frame_length = _pending_command_frame_length;
+		memcpy(frame, _pending_command_frame, frame_length);
+		cmd0 = _pending_command_cmd0;
+		cmd1 = _pending_command_cmd1;
+		_command_queued = false;
+	}
+
+	pthread_mutex_unlock(&_command_mutex);
+
+	if (frame_length == 0) {
+		return;
+	}
+
 	size_t offset = 0;
 
 	while (offset < frame_length) {
 		const ssize_t written = ::write(_fd, &frame[offset], frame_length - offset);
 
-		if (written > 0) { offset += (size_t)written; continue; }
-
-		if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-			pollfd output{}; output.fd = _fd; output.events = POLLOUT;
-			if (px4_poll(&output, 1, 100) > 0) { continue; }
+		if (written > 0) {
+			offset += (size_t)written;
+			continue;
 		}
 
+		if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+			pollfd output{};
+			output.fd = _fd;
+			output.events = POLLOUT;
+
+			if (px4_poll(&output, 1, 100) > 0) {
+				continue;
+			}
+		}
+
+		pthread_mutex_lock(&_command_mutex);
 		_command_send_error_count++;
+		_command_busy = false;
+		pthread_mutex_unlock(&_command_mutex);
 		PX4_ERR("UART command write failed (%i)", errno);
-		return PX4_ERROR;
+		return;
 	}
 
+	pthread_mutex_lock(&_command_mutex);
 	_command_send_count++;
-	_last_command_cmd0 = cmd0; _last_command_cmd1 = cmd1;
+	_last_command_cmd0 = cmd0;
+	_last_command_cmd1 = cmd1;
 	_command_response_pending = true;
-	PX4_INFO("sent command %02x %02x (%u payload bytes)", cmd0, cmd1, (unsigned)length);
-	return PX4_OK;
+	_command_response_deadline = hrt_absolute_time() + kCommandResponseTimeoutUs;
+	pthread_mutex_unlock(&_command_mutex);
+	PX4_INFO("sent command %02x %02x (%u frame bytes)", cmd0, cmd1, (unsigned)frame_length);
+}
+
+void UartTracker::check_command_response_timeout()
+{
+	bool timed_out = false;
+	pthread_mutex_lock(&_command_mutex);
+
+	if (_command_response_pending && hrt_absolute_time() >= _command_response_deadline) {
+		_command_response_pending = false;
+		_command_busy = false;
+		_command_send_error_count++;
+		_command_response_timeout_count++;
+		timed_out = true;
+	}
+
+	pthread_mutex_unlock(&_command_mutex);
+
+	if (timed_out) {
+		PX4_WARN("UART command response timeout");
+	}
 }
 
 void UartTracker::handle_command_response(uint8_t cmd0, uint8_t cmd1, uint8_t length)
 {
+	pthread_mutex_lock(&_command_mutex);
 	_command_response_count++;
 	_last_response_cmd0 = cmd0; _last_response_cmd1 = cmd1;
-	_command_response_pending = false;
+
+	if (_command_response_pending && cmd0 == _last_command_cmd0
+	    && cmd1 == (uint8_t)(_last_command_cmd1 | 0x80)) {
+		_command_response_pending = false;
+		_command_busy = false;
+	}
+
+	pthread_mutex_unlock(&_command_mutex);
 	PX4_INFO("command response %02x %02x (%u payload bytes)", cmd0, cmd1, (unsigned)length);
 }
-
 int UartTracker::print_usage(const char *reason)
 {
 	if (reason) {
@@ -351,8 +435,8 @@ int UartTracker::print_status()
 	PX4_INFO("gimbal action: %s, gain: %.2f, deadband: %.4f rad", _gimbal_action_enabled ? "on" : "off",
 		 (double)_action_gain, (double)_action_deadband_rad);
 	PX4_INFO("action timeout: 500 ms, count: %" PRIu32, _action_timeout_count);
-	PX4_INFO("commands: sent %" PRIu32 ", errors %" PRIu32 ", responses %" PRIu32,
-		 _command_send_count, _command_send_error_count, _command_response_count);
+	PX4_INFO("commands: sent %" PRIu32 ", errors %" PRIu32 ", timeouts %" PRIu32 ", responses %" PRIu32,
+		 _command_send_count, _command_send_error_count, _command_response_timeout_count, _command_response_count);
 	PX4_INFO("last command: %02x %02x, last response: %02x %02x, pending: %s",
 		 _last_command_cmd0, _last_command_cmd1, _last_response_cmd0, _last_response_cmd1,
 		 _command_response_pending ? "yes" : "no");
@@ -372,6 +456,7 @@ void UartTracker::run()
 	fds.events = POLLIN;
 
 	while (!should_exit()) {
+		process_pending_command();
 		const int ret = px4_poll(&fds, 1, 100);
 
 		if (ret < 0) {
@@ -388,6 +473,7 @@ void UartTracker::run()
 		}
 
 		check_action_timeout();
+		check_command_response_timeout();
 	}
 
 	if (_gimbal_action_enabled) {

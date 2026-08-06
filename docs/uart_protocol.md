@@ -146,7 +146,7 @@ uart_tracker send info
 | `uart_tracker send color <R> <G> <B>` | 设置OSD颜色 |
 | `uart_tracker send text <行号> "<文字>"` | 显示自定义文字 |
 
-发送帧为 `58 07 CMD0 CMD1 LEN DATA CHK 59`。模块会继续在同一串口解析反馈帧；`uart_tracker status` 显示发送次数、错误次数、响应次数及最后命令字。发送功能要求慧眼RX连接飞控UART3 TX。
+发送帧为 `58 07 CMD0 CMD1 LEN DATA CHK 59`。NSH 命令先将完整帧放入单命令队列，实际串口写入由持有 `/dev/ttyS2` 文件描述符的 `uart_tracker` 任务执行，避免跨 NuttX 任务使用文件描述符导致 `EBADF (9)`。模块会继续在同一串口解析反馈帧；`uart_tracker status` 显示发送次数、错误次数、超时次数、响应次数及最后命令字。每次发送最多等待响应 2 秒，等待期间拒绝新的发送命令。发送功能要求慧眼RX连接飞控UART3 TX。
 
 ## UART 信息转换为动作
 

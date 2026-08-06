@@ -6,6 +6,8 @@
 #include <uORB/topics/gimbal_manager_set_manual_control.h>
 #include <uORB/topics/tracker_target.h>
 
+#include <pthread.h>
+#include <stddef.h>
 #include <stdint.h>
 
 class UartTracker : public ModuleBase<UartTracker>
@@ -70,12 +72,16 @@ private:
 	static constexpr uint8_t kMaxDetectionTargets = 22;
 	static constexpr uint8_t kHeartbeatPayloadLength = 6;
 	static constexpr uint64_t kActionTimeoutUs = 500000;
+	static constexpr uint64_t kCommandResponseTimeoutUs = 2000000;
+	static constexpr size_t kMaxCommandFrameLength = kMaxPayloadLength + 7;
 
 	bool open_uart();
 	void close_uart();
 	bool configure_uart();
 	int send_command(int argc, char *argv[]);
 	int send_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, uint8_t length);
+	void process_pending_command();
+	void check_command_response_timeout();
 	void handle_command_response(uint8_t cmd0, uint8_t cmd1, uint8_t length);
 	void parse_byte(uint8_t byte);
 	void handle_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, uint8_t length);
@@ -129,11 +135,20 @@ private:
 	uint32_t _action_timeout_count{0};
 	uint32_t _command_send_count{0};
 	uint32_t _command_send_error_count{0};
+	uint32_t _command_response_timeout_count{0};
 	uint32_t _command_response_count{0};
 	uint8_t _last_command_cmd0{0};
 	uint8_t _last_command_cmd1{0};
 	uint8_t _last_response_cmd0{0};
 	uint8_t _last_response_cmd1{0};
+	uint8_t _pending_command_frame[kMaxCommandFrameLength]{};
+	size_t _pending_command_frame_length{0};
+	uint8_t _pending_command_cmd0{0};
+	uint8_t _pending_command_cmd1{0};
+	uint64_t _command_response_deadline{0};
+	pthread_mutex_t _command_mutex{};
+	bool _command_queued{false};
+	bool _command_busy{false};
 	bool _command_response_pending{false};
 	bool _action_timeout_triggered{false};
 
