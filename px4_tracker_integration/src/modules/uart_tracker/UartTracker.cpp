@@ -440,6 +440,8 @@ int UartTracker::print_status()
 	PX4_INFO("last command: %02x %02x, last response: %02x %02x, pending: %s",
 		 _last_command_cmd0, _last_command_cmd1, _last_response_cmd0, _last_response_cmd1,
 		 _command_response_pending ? "yes" : "no");
+	PX4_INFO("rc aux switch: position %u, sequence %u",
+		 (unsigned)_aux_position, (unsigned)_aux_sequence);
 	return PX4_OK;
 }
 
@@ -456,7 +458,9 @@ void UartTracker::run()
 	fds.events = POLLIN;
 
 	while (!should_exit()) {
+		check_rc_aux_switch();
 		process_pending_command();
+		run_aux_sequence();
 		const int ret = px4_poll(&fds, 1, 100);
 
 		if (ret < 0) {
@@ -907,6 +911,118 @@ void UartTracker::check_action_timeout()
 	_action_timeout_triggered = true;
 	_action_timeout_count++;
 	publish_target(timeout_target);
+}
+
+void UartTracker::check_rc_aux_switch()
+{
+	_manual_control_setpoint_sub.update(&_manual);
+
+	if (!_manual.valid) {
+		return;
+	}
+
+	const float aux1 = _manual.aux1;
+	AuxPosition new_position = AuxPosition::UNKNOWN;
+
+	if (aux1 > kAuxThreshold) {
+		new_position = AuxPosition::ON;
+	} else if (aux1 < -kAuxThreshold) {
+		new_position = AuxPosition::OFF;
+	} else {
+		new_position = AuxPosition::MID;
+	}
+
+	if (new_position == _aux_position) {
+		return;
+	}
+
+	const AuxPosition previous = _aux_position;
+	_aux_position = new_position;
+
+	if (previous == AuxPosition::UNKNOWN) {
+		PX4_INFO("RC aux switch init: position %u", (unsigned)new_position);
+		return;
+	}
+
+	_aux_sequence = AuxSequence::Idle;
+	PX4_INFO("RC aux switch: %u -> %u", (unsigned)previous, (unsigned)new_position);
+
+	if (_fd < 0) {
+		PX4_WARN("UART is not open, cannot send aux command");
+		return;
+	}
+
+	switch (new_position) {
+	case AuxPosition::ON: {
+		const uint8_t payload[] = {2, 0, 0, 0};
+		send_frame(0x03, 0x05, payload, 4);
+		break;
+	}
+
+	case AuxPosition::OFF: {
+		const uint8_t payload[] = {0, 0};
+		send_frame(0x03, 0x01, payload, 2);
+		break;
+	}
+
+	case AuxPosition::MID: {
+		const uint8_t payload[] = {0, 0, 0, 0};
+		const int result = send_frame(0x03, 0x05, payload, 4);
+
+		if (result == PX4_OK) {
+			_aux_sequence = AuxSequence::AutolockOff;
+		}
+
+		break;
+	}
+
+	default:
+		break;
+	}
+}
+
+void UartTracker::run_aux_sequence()
+{
+	if (_aux_sequence == AuxSequence::Idle) {
+		return;
+	}
+
+	if (_aux_position != AuxPosition::MID) {
+		_aux_sequence = AuxSequence::Idle;
+		return;
+	}
+
+	switch (_aux_sequence) {
+	case AuxSequence::AutolockOff:
+		if (!_command_busy) {
+			_aux_cooldown_deadline = hrt_absolute_time() + kAuxCooldownUs;
+			_aux_sequence = AuxSequence::Cooldown;
+		}
+
+		break;
+
+	case AuxSequence::Cooldown:
+		if (hrt_absolute_time() >= _aux_cooldown_deadline) {
+			const uint8_t payload[] = {1, 0};
+			const int result = send_frame(0x03, 0x01, payload, 2);
+
+			_aux_sequence = (result == PX4_OK)
+				? AuxSequence::DetectOn : AuxSequence::Idle;
+		}
+
+		break;
+
+	case AuxSequence::DetectOn:
+		if (!_command_busy) {
+			_aux_sequence = AuxSequence::Idle;
+		}
+
+		break;
+
+	default:
+		_aux_sequence = AuxSequence::Idle;
+		break;
+	}
 }
 
 uint8_t UartTracker::checksum8(const uint8_t *data, uint16_t length)

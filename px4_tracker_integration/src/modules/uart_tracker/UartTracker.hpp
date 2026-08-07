@@ -2,8 +2,10 @@
 
 #include <px4_platform_common/module.h>
 #include <uORB/Publication.hpp>
+#include <uORB/Subscription.hpp>
 #include <uORB/topics/debug_array.h>
 #include <uORB/topics/gimbal_manager_set_manual_control.h>
+#include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/tracker_target.h>
 
 #include <pthread.h>
@@ -55,6 +57,20 @@ private:
 		End,
 	};
 
+	enum class AuxPosition : uint8_t {
+		OFF = 0,
+		MID,
+		ON,
+		UNKNOWN,
+	};
+
+	enum class AuxSequence : uint8_t {
+		Idle,
+		AutolockOff,
+		Cooldown,
+		DetectOn,
+	};
+
 	static constexpr uint8_t kFeedbackHead0 = 0x78;
 	static constexpr uint8_t kFeedbackHead1 = 0x07;
 	static constexpr uint8_t kFeedbackEnd = 0x79;
@@ -91,6 +107,8 @@ private:
 	void publish_target(const DecodedTarget &target);
 	void publish_gimbal_action(const tracker_target_s &msg, const DecodedTarget &target);
 	void check_action_timeout();
+	void check_rc_aux_switch();
+	void run_aux_sequence();
 
 	static uint8_t checksum8(const uint8_t *data, uint16_t length);
 	static bool parse_u32_arg(const char *text, uint32_t maximum, uint32_t &value);
@@ -151,6 +169,15 @@ private:
 	bool _command_busy{false};
 	bool _command_response_pending{false};
 	bool _action_timeout_triggered{false};
+
+	AuxPosition _aux_position{AuxPosition::UNKNOWN};
+	AuxSequence _aux_sequence{AuxSequence::Idle};
+	uint64_t _aux_cooldown_deadline{0};
+	static constexpr float kAuxThreshold = 0.5f;
+	static constexpr uint64_t kAuxCooldownUs = 2000000;
+
+	uORB::Subscription _manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
+	manual_control_setpoint_s _manual{};
 
 	uORB::Publication<tracker_target_s> _tracker_target_pub{ORB_ID(tracker_target)};
 	uORB::Publication<debug_array_s> _debug_array_pub{ORB_ID(debug_array)};
