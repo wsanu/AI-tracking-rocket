@@ -260,6 +260,7 @@ def verify_overlay(px4_root, lock, board_configs, module_selection):
         "msg/TrackerTarget.msg",
         "msg/TrackStatus.msg",
         "src/modules/uart_tracker/UartTracker.cpp",
+        "src/modules/uart_tracker/uart_tracker_params.c",
         "src/modules/track_control/TrackControl.cpp",
     )
     for relative in expected_files:

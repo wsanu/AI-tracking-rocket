@@ -21,6 +21,8 @@
 - [ ] 完成传感器和遥控器校准。
 - [ ] Channel Monitor中Roll/Pitch/Yaw/Throttle方向正确。
 - [ ] 模式开关能选择Stabilized、Altitude和Track。
+- [ ] 独立慧眼三档开关已映射到一个未占用的 `RC_MAP_AUXn`，三个位置接近 `-1/0/+1`。
+- [ ] `TRK_RC_AUX` 指向同一个AUX编号，且物理开关方向与档位1/2/3一致。
 - [ ] Arm开关独立且方向明确。
 - [ ] QGC所有必须配置页面没有红色未完成状态。
 
@@ -32,6 +34,8 @@
 - [ ] 普通模式解锁/上锁可靠，Arm开关可立即停止电机。
 - [ ] RC断链会进入预期失控保护。
 - [ ] 拨到Track时 `vehicle_status.nav_state=9`。
+- [ ] 慧眼三档开关分别实现关闭检测、普通检测、循环位置优先自动锁定。
+- [ ] RC断链时慧眼自动锁定和检测按顺序关闭，`uart_tracker status` 无未处理故障。
 - [ ] 移动视觉目标时四路 `actuator_motors` 输出产生差动。
 - [ ] 拨回人工模式后立即退出Track。
 

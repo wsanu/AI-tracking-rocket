@@ -195,6 +195,16 @@ QGC左侧任何红色未完成项都不应忽略。禁止直接导入本项目�
 
 TRACK项目参数可在NSH中逐行执行 `reproducibility/track-parameters.nsh`。其中 `COM_FLTMODE6=16` 只适用于把Track分配到模式位置6的配置。
 
+慧眼检测/自动锁定使用独立三档开关，不复用PX4飞行模式开关。以物理通道8映射到AUX1为例：
+
+```sh
+param set RC_MAP_AUX1 8
+param set TRK_RC_AUX 1
+param save
+```
+
+实际通道号必须以QGC Channel Monitor为准。确认三个位置在 `listener manual_control_setpoint` 中分别接近 `aux1=-1/0/+1`；若方向相反，在发射机或RC校准中反向该通道。`TRK_RC_AUX=0` 会关闭拨杆自动命令并恢复手动 `uart_tracker send detect/autolock`。
+
 ## 10. 启动与拆桨验收
 
 每次重启后先检查：
@@ -203,6 +213,15 @@ TRACK项目参数可在NSH中逐行执行 `reproducibility/track-parameters.nsh`
 track_control status
 uart_tracker status
 ```
+
+启用RC三档控制后，保持拆桨并依次检查：
+
+1. 第1档：状态变为 `detect-off`，只在切入时发送一次 `detect 0`。
+2. 第2档：先关闭自动锁定，成功响应300 ms后开启普通检测。
+3. 第3档：先开启多目标检测，成功响应300 ms后按位置最近策略循环自动锁定。
+4. 保持任一档位至少10秒，确认命令计数不持续增长。
+5. 关闭遥控器，确认依次关闭自动锁定和检测；恢复RC后按当前稳定档位重新应用。
+6. 快速往返拨杆，确认最终状态收敛到最后稳定档位，没有旧序列继续执行。
 
 若UART模块未运行：
 

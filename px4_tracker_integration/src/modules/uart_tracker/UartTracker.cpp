@@ -20,6 +20,7 @@
 UartTracker::UartTracker(const char *device, int baudrate, uint16_t image_width, uint16_t image_height,
 			 float hfov_deg, float vfov_deg, bool gimbal_action_enabled, float action_gain,
 			 float action_deadband_rad) :
+	ModuleParams(nullptr),
 	_baudrate(baudrate),
 	_image_width(image_width),
 	_image_height(image_height),
@@ -182,6 +183,11 @@ int UartTracker::send_command(int argc, char *argv[])
 		return index < argc && parse_u32_arg(argv[index], maximum, value[destination]);
 	};
 
+	if (_configured_rc_aux > 0 && (!strcmp(command, "detect") || !strcmp(command, "autolock"))) {
+		PX4_ERR("RC tracker control owns %s; set TRK_RC_AUX=0 for manual control", command);
+		return PX4_ERROR;
+	}
+
 	if (!strcmp(command, "info")) { return send_frame(0x01, 0x04, nullptr, 0); }
 	if (!strcmp(command, "check")) { return send_frame(0x01, 0x03, nullptr, 0); }
 	if (!strcmp(command, "reboot")) { return send_frame(0x01, 0x05, nullptr, 0); }
@@ -265,7 +271,8 @@ int UartTracker::send_command(int argc, char *argv[])
 	return PX4_ERROR;
 }
 
-int UartTracker::send_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, uint8_t length)
+int UartTracker::send_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, uint8_t length,
+			    CommandOrigin origin)
 {
 	if (_fd < 0) {
 		PX4_ERR("UART is not open");
@@ -293,6 +300,7 @@ int UartTracker::send_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, 
 	_pending_command_frame_length = frame_length;
 	_pending_command_cmd0 = cmd0;
 	_pending_command_cmd1 = cmd1;
+	_pending_command_origin = origin;
 	_command_queued = true;
 	_command_busy = true;
 	pthread_mutex_unlock(&_command_mutex);
@@ -306,6 +314,7 @@ void UartTracker::process_pending_command()
 	size_t frame_length = 0;
 	uint8_t cmd0 = 0;
 	uint8_t cmd1 = 0;
+	CommandOrigin origin = CommandOrigin::Manual;
 	pthread_mutex_lock(&_command_mutex);
 
 	if (_command_queued) {
@@ -313,6 +322,7 @@ void UartTracker::process_pending_command()
 		memcpy(frame, _pending_command_frame, frame_length);
 		cmd0 = _pending_command_cmd0;
 		cmd1 = _pending_command_cmd1;
+		origin = _pending_command_origin;
 		_command_queued = false;
 	}
 
@@ -347,6 +357,11 @@ void UartTracker::process_pending_command()
 		_command_busy = false;
 		pthread_mutex_unlock(&_command_mutex);
 		PX4_ERR("UART command write failed (%i)", errno);
+
+		if (origin == CommandOrigin::RcSwitch) {
+			handle_rc_command_result(false, hrt_absolute_time());
+		}
+
 		return;
 	}
 
@@ -354,6 +369,7 @@ void UartTracker::process_pending_command()
 	_command_send_count++;
 	_last_command_cmd0 = cmd0;
 	_last_command_cmd1 = cmd1;
+	_active_command_origin = origin;
 	_command_response_pending = true;
 	_command_response_deadline = hrt_absolute_time() + kCommandResponseTimeoutUs;
 	pthread_mutex_unlock(&_command_mutex);
@@ -363,6 +379,7 @@ void UartTracker::process_pending_command()
 void UartTracker::check_command_response_timeout()
 {
 	bool timed_out = false;
+	CommandOrigin origin = CommandOrigin::Manual;
 	pthread_mutex_lock(&_command_mutex);
 
 	if (_command_response_pending && hrt_absolute_time() >= _command_response_deadline) {
@@ -370,6 +387,7 @@ void UartTracker::check_command_response_timeout()
 		_command_busy = false;
 		_command_send_error_count++;
 		_command_response_timeout_count++;
+		origin = _active_command_origin;
 		timed_out = true;
 	}
 
@@ -377,11 +395,18 @@ void UartTracker::check_command_response_timeout()
 
 	if (timed_out) {
 		PX4_WARN("UART command response timeout");
+
+		if (origin == CommandOrigin::RcSwitch) {
+			handle_rc_command_result(false, hrt_absolute_time());
+		}
 	}
 }
 
-void UartTracker::handle_command_response(uint8_t cmd0, uint8_t cmd1, uint8_t length)
+void UartTracker::handle_command_response(uint8_t cmd0, uint8_t cmd1, const uint8_t *payload, uint8_t length)
 {
+	bool matched = false;
+	bool success = false;
+	CommandOrigin origin = CommandOrigin::Manual;
 	pthread_mutex_lock(&_command_mutex);
 	_command_response_count++;
 	_last_response_cmd0 = cmd0; _last_response_cmd1 = cmd1;
@@ -390,10 +415,371 @@ void UartTracker::handle_command_response(uint8_t cmd0, uint8_t cmd1, uint8_t le
 	    && cmd1 == (uint8_t)(_last_command_cmd1 | 0x80)) {
 		_command_response_pending = false;
 		_command_busy = false;
+		origin = _active_command_origin;
+		matched = true;
+		success = origin == CommandOrigin::Manual || (payload != nullptr && length > 0 && payload[0] == 0);
+
+		if (origin == CommandOrigin::RcSwitch && !success) {
+			_command_send_error_count++;
+			_command_response_failure_count++;
+		}
 	}
 
 	pthread_mutex_unlock(&_command_mutex);
-	PX4_INFO("command response %02x %02x (%u payload bytes)", cmd0, cmd1, (unsigned)length);
+	PX4_INFO("command response %02x %02x (%u payload bytes, %s)", cmd0, cmd1, (unsigned)length,
+		 matched ? (success ? "success" : "failure") : "unmatched");
+
+	if (matched && origin == CommandOrigin::RcSwitch) {
+		handle_rc_command_result(success, hrt_absolute_time());
+	}
+}
+
+bool UartTracker::command_busy()
+{
+	pthread_mutex_lock(&_command_mutex);
+	const bool busy = _command_busy;
+	pthread_mutex_unlock(&_command_mutex);
+	return busy;
+}
+
+void UartTracker::update_rc_switch(hrt_abstime now)
+{
+	if (_parameter_update_sub.updated()) {
+		parameter_update_s update{};
+		_parameter_update_sub.copy(&update);
+		updateParams();
+	}
+
+	const int32_t configured_value = _param_trk_rc_aux.get();
+	const uint8_t configured_aux = configured_value >= 1 && configured_value <= 6 ?
+				       (uint8_t)configured_value : 0;
+
+	if (configured_aux != _configured_rc_aux) {
+		reset_rc_switch_control(configured_aux, now);
+	}
+
+	_manual_control_setpoint_sub.update(&_manual_control_setpoint);
+
+	if (_configured_rc_aux == 0) {
+		return;
+	}
+
+	const float aux_value = selected_rc_aux(_manual_control_setpoint);
+	const bool input_valid = _manual_control_setpoint.valid
+				 && _manual_control_setpoint.data_source == manual_control_setpoint_s::SOURCE_RC
+				 && PX4_ISFINITE(aux_value);
+
+	if (!input_valid) {
+		_rc_aux_value = NAN;
+		_rc_candidate_position = 0;
+		_rc_candidate_since = 0;
+
+		if (_rc_input_valid || _rc_stable_position != 0
+		    || _rc_desired_profile != RcTrackerProfile::SafeOff) {
+			_rc_input_valid = false;
+			_rc_stable_position = 0;
+			set_rc_desired_profile(RcTrackerProfile::SafeOff, now);
+		}
+
+		return;
+	}
+
+	_rc_aux_value = aux_value;
+	const uint8_t position = rc_position_from_aux(aux_value);
+
+	if (!_rc_input_valid || position != _rc_candidate_position) {
+		_rc_input_valid = true;
+		_rc_candidate_position = position;
+		_rc_candidate_since = now;
+		return;
+	}
+
+	if (_rc_stable_position != position && now - _rc_candidate_since >= kRcSwitchDebounceUs) {
+		_rc_stable_position = position;
+		set_rc_desired_profile(rc_profile_from_position(position), now);
+	}
+}
+
+void UartTracker::reset_rc_switch_control(uint8_t configured_aux, hrt_abstime now)
+{
+	cancel_queued_rc_command();
+	_configured_rc_aux = configured_aux;
+	_rc_input_valid = false;
+	_rc_aux_value = NAN;
+	_rc_candidate_position = 0;
+	_rc_stable_position = 0;
+	_rc_candidate_since = 0;
+	_rc_next_action_time = now;
+	_rc_desired_profile = RcTrackerProfile::Disabled;
+	_rc_applied_profile = RcTrackerProfile::Disabled;
+	_rc_sequence_profile = RcTrackerProfile::Disabled;
+	_rc_sequence_index = 0;
+	_rc_retry_count = 0;
+	_rc_current_step = RcSequenceStep::Idle;
+	_rc_command_obsolete = false;
+	_rc_fault_latched = false;
+
+	if (_configured_rc_aux > 0) {
+		set_rc_desired_profile(RcTrackerProfile::SafeOff, now);
+	}
+}
+
+void UartTracker::set_rc_desired_profile(RcTrackerProfile profile, hrt_abstime now)
+{
+	if (profile == _rc_desired_profile && !_rc_fault_latched) {
+		return;
+	}
+
+	cancel_queued_rc_command();
+	bool active_rc_command = false;
+	pthread_mutex_lock(&_command_mutex);
+	active_rc_command = _command_response_pending && _active_command_origin == CommandOrigin::RcSwitch;
+	pthread_mutex_unlock(&_command_mutex);
+
+	_rc_desired_profile = profile;
+	_rc_sequence_profile = profile;
+	_rc_sequence_index = 0;
+	_rc_retry_count = 0;
+	_rc_current_step = RcSequenceStep::Idle;
+	_rc_next_action_time = now;
+	_rc_command_obsolete = active_rc_command;
+	_rc_fault_latched = false;
+
+	if (profile == RcTrackerProfile::Disabled) {
+		_rc_applied_profile = RcTrackerProfile::Disabled;
+	}
+}
+
+void UartTracker::process_rc_sequence(hrt_abstime now)
+{
+	if (_configured_rc_aux == 0 || _rc_desired_profile == RcTrackerProfile::Disabled || _rc_fault_latched
+	    || now < _rc_next_action_time || command_busy()) {
+		return;
+	}
+
+	if (_rc_sequence_profile != _rc_desired_profile) {
+		_rc_sequence_profile = _rc_desired_profile;
+		_rc_sequence_index = 0;
+		_rc_retry_count = 0;
+	}
+
+	const uint8_t sequence_length = rc_sequence_length(_rc_sequence_profile);
+
+	if (_rc_sequence_index >= sequence_length) {
+		_rc_applied_profile = _rc_sequence_profile;
+		_rc_current_step = RcSequenceStep::Idle;
+		return;
+	}
+
+	const RcSequenceStep step = rc_sequence_step(_rc_sequence_profile, _rc_sequence_index);
+
+	if (step != RcSequenceStep::Idle && queue_rc_step(step)) {
+		_rc_current_step = step;
+		_rc_command_obsolete = false;
+	}
+}
+
+void UartTracker::handle_rc_command_result(bool success, hrt_abstime now)
+{
+	if (_rc_command_obsolete) {
+		_rc_command_obsolete = false;
+		_rc_current_step = RcSequenceStep::Idle;
+		_rc_retry_count = 0;
+		_rc_next_action_time = success ? now + kRcCommandGuardUs : now;
+		return;
+	}
+
+	if (_rc_current_step == RcSequenceStep::Idle) {
+		return;
+	}
+
+	if (success) {
+		_rc_retry_count = 0;
+		_rc_sequence_index++;
+		_rc_current_step = RcSequenceStep::Idle;
+		_rc_next_action_time = now + kRcCommandGuardUs;
+
+		if (_rc_sequence_index >= rc_sequence_length(_rc_sequence_profile)) {
+			_rc_applied_profile = _rc_sequence_profile;
+		}
+
+		return;
+	}
+
+	_rc_current_step = RcSequenceStep::Idle;
+
+	if (_rc_retry_count < kRcMaxRetries) {
+		_rc_retry_count++;
+		_rc_next_action_time = now + kRcCommandGuardUs;
+		PX4_WARN("RC tracker step retry %u/%u", (unsigned)_rc_retry_count, (unsigned)kRcMaxRetries);
+		return;
+	}
+
+	_rc_fault_latched = true;
+	PX4_ERR("RC tracker step failed after %u retries", (unsigned)kRcMaxRetries);
+}
+
+void UartTracker::cancel_queued_rc_command()
+{
+	bool canceled = false;
+	pthread_mutex_lock(&_command_mutex);
+
+	if (_command_queued && _pending_command_origin == CommandOrigin::RcSwitch) {
+		_command_queued = false;
+		_pending_command_frame_length = 0;
+		_command_busy = false;
+		canceled = true;
+	}
+
+	pthread_mutex_unlock(&_command_mutex);
+
+	if (canceled) {
+		_rc_current_step = RcSequenceStep::Idle;
+	}
+}
+
+bool UartTracker::queue_rc_step(RcSequenceStep step)
+{
+	uint8_t payload[4]{};
+	uint8_t cmd1 = 0;
+	uint8_t length = 0;
+
+	switch (step) {
+	case RcSequenceStep::AutolockOff:
+		cmd1 = 0x05;
+		length = 4;
+		payload[0] = 0;
+		payload[1] = 1;
+		break;
+
+	case RcSequenceStep::DetectOff:
+		cmd1 = 0x01;
+		length = 2;
+		payload[0] = 0;
+		break;
+
+	case RcSequenceStep::DetectOnly:
+		cmd1 = 0x01;
+		length = 2;
+		payload[0] = 1;
+		break;
+
+	case RcSequenceStep::DetectMulti:
+		cmd1 = 0x01;
+		length = 2;
+		payload[0] = 2;
+		break;
+
+	case RcSequenceStep::AutolockCyclePosition:
+		cmd1 = 0x05;
+		length = 4;
+		payload[0] = 2;
+		payload[1] = 1;
+		break;
+
+	case RcSequenceStep::Idle:
+	default:
+		return false;
+	}
+
+	return send_frame(0x03, cmd1, payload, length, CommandOrigin::RcSwitch) == PX4_OK;
+}
+
+float UartTracker::selected_rc_aux(const manual_control_setpoint_s &manual) const
+{
+	switch (_configured_rc_aux) {
+	case 1: return manual.aux1;
+	case 2: return manual.aux2;
+	case 3: return manual.aux3;
+	case 4: return manual.aux4;
+	case 5: return manual.aux5;
+	case 6: return manual.aux6;
+	default: return NAN;
+	}
+}
+
+uint8_t UartTracker::rc_position_from_aux(float value)
+{
+	if (value <= -0.5f) {
+		return 1;
+	}
+
+	if (value >= 0.5f) {
+		return 3;
+	}
+
+	return 2;
+}
+
+UartTracker::RcTrackerProfile UartTracker::rc_profile_from_position(uint8_t position)
+{
+	switch (position) {
+	case 1: return RcTrackerProfile::DetectOff;
+	case 2: return RcTrackerProfile::DetectOnly;
+	case 3: return RcTrackerProfile::AutoLock;
+	default: return RcTrackerProfile::SafeOff;
+	}
+}
+
+uint8_t UartTracker::rc_sequence_length(RcTrackerProfile profile)
+{
+	switch (profile) {
+	case RcTrackerProfile::DetectOff: return 1;
+	case RcTrackerProfile::SafeOff:
+	case RcTrackerProfile::DetectOnly:
+	case RcTrackerProfile::AutoLock: return 2;
+	case RcTrackerProfile::Disabled:
+	default: return 0;
+	}
+}
+
+UartTracker::RcSequenceStep UartTracker::rc_sequence_step(RcTrackerProfile profile, uint8_t index)
+{
+	switch (profile) {
+	case RcTrackerProfile::SafeOff:
+		return index == 0 ? RcSequenceStep::AutolockOff :
+		       (index == 1 ? RcSequenceStep::DetectOff : RcSequenceStep::Idle);
+
+	case RcTrackerProfile::DetectOff:
+		return index == 0 ? RcSequenceStep::DetectOff : RcSequenceStep::Idle;
+
+	case RcTrackerProfile::DetectOnly:
+		return index == 0 ? RcSequenceStep::AutolockOff :
+		       (index == 1 ? RcSequenceStep::DetectOnly : RcSequenceStep::Idle);
+
+	case RcTrackerProfile::AutoLock:
+		return index == 0 ? RcSequenceStep::DetectMulti :
+		       (index == 1 ? RcSequenceStep::AutolockCyclePosition : RcSequenceStep::Idle);
+
+	case RcTrackerProfile::Disabled:
+	default:
+		return RcSequenceStep::Idle;
+	}
+}
+
+const char *UartTracker::rc_profile_name(RcTrackerProfile profile)
+{
+	switch (profile) {
+	case RcTrackerProfile::Disabled: return "disabled";
+	case RcTrackerProfile::SafeOff: return "safe-off";
+	case RcTrackerProfile::DetectOff: return "detect-off";
+	case RcTrackerProfile::DetectOnly: return "detect-only";
+	case RcTrackerProfile::AutoLock: return "auto-lock";
+	default: return "unknown";
+	}
+}
+
+const char *UartTracker::rc_step_name(RcSequenceStep step)
+{
+	switch (step) {
+	case RcSequenceStep::Idle: return "idle";
+	case RcSequenceStep::AutolockOff: return "autolock-off";
+	case RcSequenceStep::DetectOff: return "detect-off";
+	case RcSequenceStep::DetectOnly: return "detect-only";
+	case RcSequenceStep::DetectMulti: return "detect-multi";
+	case RcSequenceStep::AutolockCyclePosition: return "autolock-cycle-position";
+	default: return "unknown";
+	}
 }
 int UartTracker::print_usage(const char *reason)
 {
@@ -405,6 +791,8 @@ int UartTracker::print_usage(const char *reason)
 		R"DESCR_STR(
 ### Description
 Read Huiyan V3.1 tracking feedback frames from UART and publish tracker_target.
+Set TRK_RC_AUX to 1..6 to control detection and automatic locking from
+the corresponding manual_control_setpoint AUX channel.
 )DESCR_STR");
 
 	PRINT_MODULE_USAGE_NAME("uart_tracker", "module");
@@ -435,11 +823,26 @@ int UartTracker::print_status()
 	PX4_INFO("gimbal action: %s, gain: %.2f, deadband: %.4f rad", _gimbal_action_enabled ? "on" : "off",
 		 (double)_action_gain, (double)_action_deadband_rad);
 	PX4_INFO("action timeout: 500 ms, count: %" PRIu32, _action_timeout_count);
-	PX4_INFO("commands: sent %" PRIu32 ", errors %" PRIu32 ", timeouts %" PRIu32 ", responses %" PRIu32,
-		 _command_send_count, _command_send_error_count, _command_response_timeout_count, _command_response_count);
+	PX4_INFO("commands: sent %" PRIu32 ", errors %" PRIu32 ", timeouts %" PRIu32 ", rejected %" PRIu32
+		 ", responses %" PRIu32, _command_send_count, _command_send_error_count,
+		 _command_response_timeout_count, _command_response_failure_count, _command_response_count);
 	PX4_INFO("last command: %02x %02x, last response: %02x %02x, pending: %s",
 		 _last_command_cmd0, _last_command_cmd1, _last_response_cmd0, _last_response_cmd1,
 		 _command_response_pending ? "yes" : "no");
+
+	if (_configured_rc_aux == 0) {
+		PX4_INFO("RC tracker switch: disabled (TRK_RC_AUX=0)");
+
+	} else {
+		PX4_INFO("RC tracker switch: AUX%u, input: %s, value: %.3f, position: %u",
+			 (unsigned)_configured_rc_aux, _rc_input_valid ? "valid" : "invalid",
+			 (double)_rc_aux_value, (unsigned)_rc_stable_position);
+		PX4_INFO("RC tracker desired: %s, applied: %s, step: %s, retry: %u, fault: %s",
+			 rc_profile_name(_rc_desired_profile), rc_profile_name(_rc_applied_profile),
+			 rc_step_name(_rc_current_step), (unsigned)_rc_retry_count,
+			 _rc_fault_latched ? "yes" : "no");
+	}
+
 	return PX4_OK;
 }
 
@@ -450,12 +853,17 @@ void UartTracker::run()
 		return;
 	}
 
+	updateParams();
+
 	uint8_t buffer[64];
 	pollfd fds{};
 	fds.fd = _fd;
 	fds.events = POLLIN;
 
 	while (!should_exit()) {
+		const hrt_abstime now = hrt_absolute_time();
+		update_rc_switch(now);
+		process_rc_sequence(now);
 		process_pending_command();
 		const int ret = px4_poll(&fds, 1, 100);
 
@@ -627,7 +1035,7 @@ void UartTracker::handle_frame(uint8_t cmd0, uint8_t cmd1, const uint8_t *payloa
 
 	if ((_command_response_pending && cmd0 == _last_command_cmd0 && cmd1 == expected_response_cmd1)
 	    || cmd0 != kPeriodicCmd) {
-		handle_command_response(cmd0, cmd1, length);
+		handle_command_response(cmd0, cmd1, payload, length);
 		return;
 	}
 

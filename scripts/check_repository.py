@@ -22,6 +22,7 @@ REQUIRED = (
     "px4_tracker_integration/msg/TrackerTarget.msg",
     "px4_tracker_integration/msg/TrackStatus.msg",
     "px4_tracker_integration/src/modules/uart_tracker/UartTracker.cpp",
+    "px4_tracker_integration/src/modules/uart_tracker/uart_tracker_params.c",
     "px4_tracker_integration/src/modules/track_control/TrackControl.cpp",
     "tests/test_tracker_protocol.py",
     "tests/test_dashboard_protocol.mjs",

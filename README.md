@@ -8,6 +8,7 @@
 - `hkust_nxt-dual_default` 编译、链接和上板启动通过。
 - 真实慧眼UART数据解析通过，实测解析错误为0。
 - QGC可选择Track模式，`vehicle_status.nav_state=9`。
+- 支持用独立三档RC AUX拨杆控制慧眼检测、循环自动锁定和安全关闭。
 - 拆桨状态下，目标移动能产生四路电机差动输出。
 - 尚未完成带桨Track飞行、目标长期丢失和RC丢失实飞验证。
 
@@ -116,6 +117,7 @@ listener actuator_motors -n 20 -r 5
 
 - `uart_tracker start` 的长选项存在实例化问题，先使用板级默认参数启动。
 - 离开Track后 `track_status` 可能保留最后一帧；当前模式以 `vehicle_status.nav_state` 为准。
+- RC拨杆控制默认关闭；必须先校准遥控器，并配置 `RC_MAP_AUXn` 与 `TRK_RC_AUX`。
 - 当前固件FLASH使用率约98.39%，不要随意增加板级模块。
 - HK38203 V2.1电流采样比例需要针对实际硬件标定。
 
