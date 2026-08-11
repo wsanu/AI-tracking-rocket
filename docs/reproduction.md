@@ -197,20 +197,32 @@ TRACK项目参数可在NSH中逐行执行 `reproducibility/track-parameters.nsh`
 
 ## 10. 启动与拆桨验收
 
-每次重启后先检查：
+`hkust_nxt-dual` 的板级 `rc.board_extras` 会在每次上电时自动执行：
+
+```sh
+uart_tracker start
+track_control start
+```
+
+两条命令独立执行，不使用 `&&`。正常情况下无需连接电脑或手动输入 `uart_tracker start`。每次重启后可检查：
 
 ```sh
 track_control status
 uart_tracker status
 ```
 
-若UART模块未运行：
+若UART模块未运行，先用 `dmesg` 检查 `/dev/ttyS2` 打开失败或任务退出，再按需诊断：
 
 ```sh
+uart_tracker status
+uart_tracker stop
 uart_tracker start
+dmesg
 ```
 
-当前版本使用板级默认设备 `/dev/ttyS2`、115200 baud和1280×720视场参数。不要使用已知有问题的 `--width/--height/--hfov/--vfov` 长选项启动。
+当前版本自动启动使用板级默认设备 `/dev/ttyS2`、115200 baud、1280×720、HFOV 62°和VFOV 48°。不要使用已知有问题的 `--width/--height/--hfov/--vfov` 长选项启动。模块已经运行时再次执行 `uart_tracker start`，预期会报告已经运行或拒绝重复实例。
+
+`uart_tracker` 在独立任务中打开UART；视觉设备未接入或暂时无响应不会阻止 `track_control` 和其他PX4模块继续启动。自动启动也不会替代 `RC_MAP_AUX1` 等遥控器映射配置。
 
 按顺序验收：
 

@@ -17,12 +17,15 @@ $required = @(
     "px4_tracker_integration\src\modules\track_control\TrackControl.hpp",
     "px4_tracker_integration\src\modules\track_control\track_control_params.c",
     "scripts\install_track_mode_overlay.ps1",
+    "scripts\px4_overlay_common.ps1",
     "tools\make_tracker_frame.py",
     "tools\tracker_dashboard\index.html",
     "tools\tracker_dashboard\styles.css",
     "tools\tracker_dashboard\app.mjs",
     "tools\tracker_dashboard\protocol.mjs",
     "tests\test_tracker_protocol.py",
+    "tests\test_px4_overlay.py",
+    "tests\test_px4_overlay.ps1",
     "tests\test_dashboard_protocol.mjs"
 )
 

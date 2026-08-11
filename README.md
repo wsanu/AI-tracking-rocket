@@ -126,7 +126,14 @@ RC 开关控制链路：
 .\scripts\verify_layout.ps1
 ```
 
-`install_px4_overlay.ps1` 会自动安装UART层和TRACK层，不需要再次调用 `install_track_mode_overlay.ps1`。
+`install_px4_overlay.ps1` 会清理并完整重装UART层和TRACK层，不需要再次调用 `install_track_mode_overlay.ps1`。覆盖脚本会保留其他板级启动内容，并把以下两条独立命令幂等写入 `hkust_nxt-dual` 的 `rc.board_extras`：
+
+```sh
+uart_tracker start
+track_control start
+```
+
+`uart_tracker` 先启动，但不会用 `&&` 阻塞或限制 `track_control` 的启动。
 
 ## 上板最小检查
 
@@ -138,12 +145,11 @@ param save
 reboot
 ```
 
-其中 `5` 是示例 Channel 5；使用其他空闲通道时替换为对应通道号。重启后继续执行：
+其中 `5` 是示例 Channel 5；使用其他空闲通道时替换为对应通道号。重启后固件会自动启动 `uart_tracker` 和 `track_control`，无需在MAVLink Console手动执行启动命令。继续检查：
 
 ```sh
 ver all
 track_control status
-uart_tracker start
 uart_tracker status
 listener tracker_target -n 5
 listener vehicle_status -n 1
@@ -151,13 +157,24 @@ listener track_status -n 5
 listener actuator_motors -n 20 -r 5
 ```
 
+诊断时可以使用：
+
+```sh
+uart_tracker status
+uart_tracker stop
+uart_tracker start
+dmesg
+```
+
+若模块已自动运行，再次执行 `uart_tracker start` 应报告实例已经运行或拒绝创建重复实例。`dmesg` 用于检查 `/dev/ttyS2` 打开失败或任务退出；视觉设备缺失不会阻止 `track_control` 和其他PX4模块继续启动。
+
 当前已知限制：
 
-- `uart_tracker start` 的长选项存在实例化问题，先使用板级默认参数启动。
+- `uart_tracker start` 的长选项存在实例化问题；自动启动使用板级默认参数，不要使用 `--width/--height/--hfov/--vfov`。
 - Module stop/restart 时 AUX 开关位置不会重置为 `UNKNOWN`。
 - 模块不读取 `RC_MAP_AUX1` 参数值，必须按上面的步骤手动配置映射。
 - 离开Track后 `track_status` 可能保留最后一帧；当前模式以 `vehicle_status.nav_state` 为准。
-- V1.1.2 固件 Flash 使用率为 92.87%，增加板级模块前仍应检查剩余空间。
+- 本次自动启动固件链接器报告 FLASH 使用 1,704,020 / 1,835,008 字节（92.86%），未溢出；继续增加板级模块前仍应检查剩余空间。
 - HK38203 V2.1电流采样比例需要针对实际硬件标定。
 
 ## 安全文档

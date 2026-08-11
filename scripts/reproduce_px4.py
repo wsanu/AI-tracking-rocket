@@ -7,6 +7,7 @@ without changing the TRACK control algorithm.
 """
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -17,6 +18,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCK_PATH = REPO_ROOT / "reproducibility" / "px4-base.json"
 MODULE_SELECTION_PATH = REPO_ROOT / "reproducibility" / "module-build-selection.json"
+OVERLAY_MODULES = ("uart_tracker", "track_control")
+STARTUP_COMMANDS = ("uart_tracker start", "track_control start")
 
 
 def load_lock():
@@ -27,6 +30,7 @@ def load_lock():
 def load_module_selection():
     with MODULE_SELECTION_PATH.open("r", encoding="utf-8") as stream:
         return json.load(stream)
+
 
 def run(command, cwd=None):
     print("+", " ".join(str(part) for part in command))
@@ -43,6 +47,123 @@ def write_text(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as stream:
         stream.write(content)
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def install_clean_module(px4_root, modules_source, module):
+    if module not in OVERLAY_MODULES:
+        raise RuntimeError("Refusing unexpected overlay module: {}".format(module))
+
+    source = (modules_source / module).resolve(strict=True)
+    modules_root = (px4_root / "src" / "modules").resolve(strict=True)
+    target = modules_root / module
+
+    if source.name != module or not source.is_dir():
+        raise RuntimeError("Invalid overlay module source: {}".format(source))
+
+    if target.name != module or target.parent != modules_root:
+        raise RuntimeError("Unsafe overlay module target: {}".format(target))
+
+    if target.is_symlink():
+        raise RuntimeError("Refusing symbolic-link overlay target: {}".format(target))
+
+    if target.exists():
+        resolved_target = target.resolve(strict=True)
+
+        if not resolved_target.is_dir() or resolved_target.parent != modules_root:
+            raise RuntimeError("Unsafe overlay module directory: {}".format(target))
+
+        shutil.rmtree(str(target))
+        print("Removed stale module tree:", target)
+
+    shutil.copytree(str(source), str(target))
+    print("Installed module:", target)
+
+
+def normalize_board_startup(content):
+    """Return rc.board_extras with one ordered, independent startup pair."""
+    lines = content.splitlines()
+    command_indexes = [
+        index for index, line in enumerate(lines) if line.strip() in STARTUP_COMMANDS
+    ]
+    first_command_index = min(command_indexes) if command_indexes else None
+    remaining = [line for line in lines if line.strip() not in STARTUP_COMMANDS]
+
+    if first_command_index is None:
+        insert_at = len(remaining)
+
+        if remaining and remaining[-1] != "":
+            remaining.append("")
+            insert_at = len(remaining)
+
+    else:
+        insert_at = sum(
+            1
+            for line in lines[:first_command_index]
+            if line.strip() not in STARTUP_COMMANDS
+        )
+
+    for offset, command in enumerate(STARTUP_COMMANDS):
+        remaining.insert(insert_at + offset, command)
+
+    return "\n".join(remaining).rstrip("\n") + "\n"
+
+
+def verify_board_startup_content(content):
+    lines = [line.strip() for line in content.splitlines()]
+    indexes = []
+
+    for command in STARTUP_COMMANDS:
+        if lines.count(command) != 1:
+            raise RuntimeError(
+                "Board startup command must appear exactly once: {}".format(command)
+            )
+        indexes.append(lines.index(command))
+
+    if indexes[0] >= indexes[1]:
+        raise RuntimeError("uart_tracker must start before track_control")
+
+    for line in lines:
+        if "&&" in line and any(command in line for command in STARTUP_COMMANDS):
+            raise RuntimeError("Board startup commands must not be joined with &&")
+
+
+def verify_tree_match(source, target):
+    source = source.resolve(strict=True)
+    if target.is_symlink():
+        raise RuntimeError("Refusing symbolic-link overlay target: {}".format(target))
+    target = target.resolve(strict=True)
+
+    source_files = {
+        path.relative_to(source).as_posix(): path
+        for path in source.rglob("*")
+        if path.is_file()
+    }
+    target_files = {
+        path.relative_to(target).as_posix(): path
+        for path in target.rglob("*")
+        if path.is_file()
+    }
+
+    if set(source_files) != set(target_files):
+        missing = sorted(set(source_files) - set(target_files))
+        extra = sorted(set(target_files) - set(source_files))
+        raise RuntimeError(
+            "Overlay file-set mismatch for {} (missing={}, extra={})".format(
+                target, missing, extra
+            )
+        )
+
+    for relative, source_path in source_files.items():
+        if sha256(source_path) != sha256(target_files[relative]):
+            raise RuntimeError("Overlay hash mismatch: {}/{}".format(target, relative))
 
 
 def replace_exact_once(px4_root, relative_path, before, after):
@@ -134,11 +255,8 @@ def verify_module_selection(px4_root, selection):
 
 def copy_overlay(px4_root):
     modules = REPO_ROOT / "px4_tracker_integration" / "src" / "modules"
-    for module in ("uart_tracker", "track_control"):
-        source = modules / module
-        target = px4_root / "src" / "modules" / module
-        shutil.copytree(str(source), str(target), dirs_exist_ok=True)
-        print("Installed module:", target)
+    for module in OVERLAY_MODULES:
+        install_clean_module(px4_root, modules, module)
 
     for message in ("TrackerTarget.msg", "TrackStatus.msg"):
         source = REPO_ROOT / "px4_tracker_integration" / "msg" / message
@@ -246,13 +364,13 @@ def configure_boards(px4_root, board_configs):
     extras = px4_root / "boards" / "hkust" / "nxt-dual" / "init" / "rc.board_extras"
     if extras.is_file():
         content = extras.read_text(encoding="utf-8")
-        if "track_control start" not in content:
-            content = content.rstrip() + (
-                "\n\n# TRACK must run before the RC mode can publish attitude setpoints.\n"
-                "track_control start\n"
-            )
-            write_text(extras, content)
-            print("Enabled track_control startup:", extras)
+        normalized = normalize_board_startup(content)
+
+        if normalized != content:
+            write_text(extras, normalized)
+            print("Normalized tracker startup:", extras)
+
+        verify_board_startup_content(normalized)
 
 
 def verify_overlay(px4_root, lock, board_configs, module_selection):
@@ -265,6 +383,19 @@ def verify_overlay(px4_root, lock, board_configs, module_selection):
     for relative in expected_files:
         if not (px4_root / relative).is_file():
             raise RuntimeError("Overlay verification failed, missing {}".format(relative))
+
+    modules_source = REPO_ROOT / "px4_tracker_integration" / "src" / "modules"
+    for module in OVERLAY_MODULES:
+        verify_tree_match(
+            modules_source / module, px4_root / "src" / "modules" / module
+        )
+
+    for message in ("TrackerTarget.msg", "TrackStatus.msg"):
+        source = REPO_ROOT / "px4_tracker_integration" / "msg" / message
+        target = px4_root / "msg" / message
+
+        if sha256(source) != sha256(target):
+            raise RuntimeError("Overlay message hash mismatch: {}".format(message))
 
     checks = {
         "msg/VehicleStatus.msg": "NAVIGATION_STATE_TRACK = 9",
@@ -283,6 +414,11 @@ def verify_overlay(px4_root, lock, board_configs, module_selection):
             for setting in ("CONFIG_MODULES_UART_TRACKER=y", "CONFIG_MODULES_TRACK_CONTROL=y"):
                 if setting not in content:
                     raise RuntimeError("Missing {} in {}".format(setting, relative))
+
+    extras = px4_root / "boards" / "hkust" / "nxt-dual" / "init" / "rc.board_extras"
+    if not extras.is_file():
+        raise RuntimeError("Missing hkust_nxt-dual rc.board_extras")
+    verify_board_startup_content(extras.read_text(encoding="utf-8"))
 
     verify_module_selection(px4_root, module_selection)
 

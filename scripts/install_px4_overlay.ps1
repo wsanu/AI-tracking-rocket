@@ -12,6 +12,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $px4RootPath = Resolve-Path $Px4Root
+. (Join-Path $PSScriptRoot "px4_overlay_common.ps1")
 
 $modulesDir = Join-Path $px4RootPath "src\modules"
 $msgDir = Join-Path $px4RootPath "msg"
@@ -34,8 +35,7 @@ $targetModule = Join-Path $modulesDir "uart_tracker"
 $targetMsg = Join-Path $msgDir "TrackerTarget.msg"
 $msgCMakePath = Join-Path $msgDir "CMakeLists.txt"
 
-New-Item -ItemType Directory -Force -Path $targetModule | Out-Null
-Copy-Item -Recurse -Force (Join-Path $sourceModule "*") $targetModule
+Install-CleanOverlayModule -Px4RootPath $px4RootPath -SourcePath $sourceModule -ModuleName "uart_tracker" | Out-Null
 Copy-Item -Force $sourceMsg $targetMsg
 
 Write-Host "Installed uart_tracker module to $targetModule"
@@ -79,3 +79,8 @@ foreach ($boardConfig in $BoardConfigs) {
 
 # Install the additive TRACK flight-mode layer after the legacy UART overlay.
 & (Join-Path $PSScriptRoot "install_track_mode_overlay.ps1") -Px4Root $px4RootPath -BoardConfigs $BoardConfigs
+
+Assert-OverlayTreeMatch -SourcePath $sourceModule -TargetPath $targetModule
+Assert-FileHashMatch -SourcePath $sourceMsg -TargetPath $targetMsg
+Assert-Px4BoardStartupContent -Content ([IO.File]::ReadAllText((Join-Path $px4RootPath "boards\hkust\nxt-dual\init\rc.board_extras")))
+Write-Host "Verified UART and TRACK startup overlay"

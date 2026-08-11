@@ -42,20 +42,21 @@ uart_tracker -> TrackerTarget(direction_body) -> track_control
 
 ## 启动和模式切换
 
-HKUST NXT Dual板级启动脚本自动执行：
+HKUST NXT Dual板级启动脚本按顺序自动执行：
 
 ```sh
+uart_tracker start
 track_control start
 ```
 
-视觉串口模块当前需要上电后确认：
+两条命令独立执行，不使用 `&&`。`uart_tracker` 在独立任务中打开UART，所以视觉设备暂时无响应或 `/dev/ttyS2` 打开失败不会阻止 `track_control` 和其他PX4模块启动。上电后可用以下命令确认状态：
 
 ```sh
 uart_tracker status
-uart_tracker start
+track_control status
 ```
 
-板级默认设备是 `/dev/ttyS2`，115200 baud，默认图像1280×720、HFOV 62°、VFOV 48°。当前长选项存在已知实例化问题，不要使用带 `--width/--height/--hfov/--vfov` 的启动命令。
+板级默认设备是 `/dev/ttyS2`，115200 baud，默认图像1280×720、HFOV 62°、VFOV 48°。正常上电无需连接电脑输入启动命令。当前长选项存在已知实例化问题，不要使用带 `--width/--height/--hfov/--vfov` 的启动命令；`uart_tracker stop/start` 仅用于诊断。
 
 将一个 `COM_FLTMODE*` 设置为16。在Stabilized或Altitude/Position模式完成检查和解锁，再切换到Track；不能直接在Track中解锁。
 

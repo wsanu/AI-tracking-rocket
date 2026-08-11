@@ -94,16 +94,17 @@ make hkust_nxt-dual_default -j4
 
 - `uart_tracker`长选项会导致实例化失败；先使用板级默认参数。
 - 离开TRACK后没有发布新的 `active=false` 状态，旧 `track_status` 可能被误读；当前模式以 `vehicle_status.nav_state` 为准。
-- `uart_tracker`启动持久化尚未完成，每次上电要检查状态。
-- 固件FLASH约98.39%，继续增加模块前必须检查容量。
+- `hkust_nxt-dual` 固件通过 `rc.board_extras` 自动启动 `uart_tracker`，并在其后独立启动 `track_control`；每次发布仍应检查ROMFS中的顺序和唯一性。
+- 本次自动启动固件FLASH为1,704,020 / 1,835,008字节（92.86%），继续增加模块前必须重新检查容量。
 - HK38203 V2.1电流比例尚需按实际硬件标定。
 
 ## 发布检查清单
 
 - [ ] 仓库结构、Python和两个Node测试通过。
-- [ ] 干净PX4工作树首次安装与第二次幂等安装通过。
+- [ ] Windows与WSL PX4工作树首次安装、第二次幂等安装、模块文件集合和SHA-256验证通过。
 - [ ] WSL/Ubuntu目标固件重新编译通过。
-- [ ] 固件大小、散列和构建环境已记录。
+- [ ] ROMFS中 `uart_tracker start`、`track_control start` 各出现一次且顺序正确。
+- [ ] 固件大小、散列、FLASH使用率和构建环境已记录。
 - [ ] 上板板型、UART、目标、TRACK和拆桨电机输出通过。
 - [ ] README与 `docs/reproduction.md` 命令已由另一环境照抄验证。
 - [ ] 未提交密钥、个人参数备份、飞行日志、构建目录或固件二进制。

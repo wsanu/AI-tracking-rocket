@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $px4RootPath = Resolve-Path $Px4Root
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+. (Join-Path $PSScriptRoot "px4_overlay_common.ps1")
 function Replace-ExactOnce {
     param([string]$RelativePath, [string]$Before, [string]$After)
     $path = Join-Path $px4RootPath $RelativePath
@@ -18,8 +19,7 @@ function Replace-ExactOnce {
 }
 $sourceTrackModule = Join-Path $repoRoot "px4_tracker_integration\src\modules\track_control"
 $targetTrackModule = Join-Path $px4RootPath "src\modules\track_control"
-New-Item -ItemType Directory -Force -Path $targetTrackModule | Out-Null
-Copy-Item -Recurse -Force (Join-Path $sourceTrackModule "*") $targetTrackModule
+Install-CleanOverlayModule -Px4RootPath $px4RootPath -SourcePath $sourceTrackModule -ModuleName "track_control" | Out-Null
 foreach ($message in @("TrackerTarget.msg", "TrackStatus.msg")) { Copy-Item -Force (Join-Path $repoRoot "px4_tracker_integration\msg\$message") (Join-Path $px4RootPath "msg\$message") }
 $msgCMakePath = Join-Path $px4RootPath "msg\CMakeLists.txt"
 $msgCMakeContent = [IO.File]::ReadAllText($msgCMakePath)
@@ -42,11 +42,7 @@ Replace-ExactOnce "src\lib\modes\ui.hpp" "`t`"9: unallocated`"," "`t`"Track`","
 $boardExtras = "boards\hkust\nxt-dual\init\rc.board_extras"
 $boardExtrasPath = Join-Path $px4RootPath $boardExtras
 if (Test-Path -LiteralPath $boardExtrasPath) {
-    $extras = [IO.File]::ReadAllText($boardExtrasPath)
-    if ($extras -notmatch "(?m)^track_control start$") {
-        $extras = $extras.TrimEnd() + "`r`n`r`n# TRACK must run before the RC mode can publish attitude setpoints.`r`ntrack_control start`r`n"
-        [IO.File]::WriteAllText($boardExtrasPath, $extras, $utf8NoBom)
-    }
+    Set-Px4BoardStartup -Path $boardExtrasPath
 }
 foreach ($boardConfig in $BoardConfigs) {
     $path = Join-Path $px4RootPath $boardConfig
@@ -73,5 +69,9 @@ foreach ($setting in $moduleSelection.disabled) {
     $selectionContent = [regex]::Replace($selectionContent, "(?m)^$([regex]::Escape($line))\r?\n?", "")
 }
 [IO.File]::WriteAllText($selectionBoardPath, $selectionContent.TrimEnd() + "`r`n", $utf8NoBom)
+Assert-OverlayTreeMatch -SourcePath $sourceTrackModule -TargetPath $targetTrackModule
+foreach ($message in @("TrackerTarget.msg", "TrackStatus.msg")) {
+    Assert-FileHashMatch -SourcePath (Join-Path $repoRoot "px4_tracker_integration\msg\$message") -TargetPath (Join-Path $px4RootPath "msg\$message")
+}
 Write-Host "Applied module build selection from $moduleSelectionPath"
 Write-Host "Installed TRACK mode overlay to $px4RootPath"

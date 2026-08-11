@@ -118,12 +118,14 @@ PX4 模块会在 `uart_tracker status` 中显示心跳数量、最后心跳计�
 
 ## PX4发送指令
 
-`uart_tracker` 必须先启动，并以读写模式打开UART3：
+`hkust_nxt-dual` 固件会通过板级 `rc.board_extras` 自动启动 `uart_tracker`，并以读写模式打开UART3。正常使用只需检查状态后发送命令：
 
 ```sh
-uart_tracker start
+uart_tracker status
 uart_tracker send info
 ```
+
+`uart_tracker start`、`uart_tracker stop` 和 `dmesg` 保留为诊断手段。模块已经运行时再次执行 `uart_tracker start`，预期会报告已经运行或拒绝重复实例。
 
 当前支持的慧眼V3.1命名指令：
 
@@ -150,11 +152,7 @@ uart_tracker send info
 
 ## UART 信息转换为动作
 
-`uart_tracker` 现在支持把有效的 `00 81` 测偏数据转换为 PX4 云台动作输出。默认仍然是只解析和发布 `tracker_target`，不会输出动作；需要显式启用：
-
-```sh
-uart_tracker start -d /dev/ttyS2 -b 115200 --width 1280 --height 720 --hfov 62 --vfov 48 --action gimbal
-```
+`uart_tracker` 支持把有效的 `00 81` 测偏数据转换为 PX4 云台动作输出。当前 `hkust_nxt-dual` 自动启动继续使用默认的只解析并发布 `tracker_target` 行为，不会输出云台动作。本任务不改变这一接口或默认值。
 
 动作输出话题：`gimbal_manager_set_manual_control`
 
@@ -165,12 +163,7 @@ uart_tracker start -d /dev/ttyS2 -b 115200 --width 1280 --height 720 --hfov 62 -
 - `--deadband-deg <deg>` 设置小误差死区，默认 `0.5` 度。
 - `--action-gain <value>` 设置动作增益，默认 `1.0`；最终速率会限幅到 `-1..1`，再由 PX4 云台参数 `MNT_RATE_PITCH` / `MNT_RATE_YAW` 转成实际角速度。
 
-示例：
-
-```sh
-uart_tracker start -d /dev/ttyS2 -b 115200 --action gimbal --action-gain 0.7 --deadband-deg 1.0
-listener gimbal_manager_set_manual_control
-```
+当前长选项存在已知实例化问题，不应使用带 `--width/--height/--hfov/--vfov` 或动作长选项的启动命令。待该问题作为独立任务修复后，再恢复相应操作示例。
 
 注意：PX4 的 gimbal manager 会检查 `origin_sysid/origin_compid` 是否是当前云台主控源。模块当前使用 `1/1` 作为板载动作源；如果 `listener gimbal_manager_set_manual_control` 能看到数据但云台不响应，需要把 gimbal manager 的主控源配置为匹配该来源，或后续把模块里的来源 ID 改成你的系统约定。
 
