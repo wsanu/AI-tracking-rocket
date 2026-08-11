@@ -26,25 +26,6 @@ class TrackerProtocolTest(unittest.TestCase):
         self.assertEqual(frame[-2], checksum8(frame[2:-2]))
         self.assertEqual(frame[-1], 0x59)
 
-    def test_make_detection_control_frames(self):
-        expected = {
-            0: "58 07 03 01 02 00 00 06 59",
-            1: "58 07 03 01 02 01 00 07 59",
-            2: "58 07 03 01 02 02 00 08 59",
-        }
-
-        for mode, frame_hex in expected.items():
-            with self.subTest(mode=mode):
-                frame = make_command_frame(0x03, 0x01, bytes([mode, 0]))
-                self.assertEqual(frame, bytes.fromhex(frame_hex))
-
-    def test_make_rc_autolock_frames(self):
-        autolock_off = make_command_frame(0x03, 0x05, bytes([0, 1, 0, 0]))
-        cycle_position = make_command_frame(0x03, 0x05, bytes([2, 1, 0, 0]))
-
-        self.assertEqual(autolock_off, bytes.fromhex("58 07 03 05 04 00 01 00 00 0d 59"))
-        self.assertEqual(cycle_position, bytes.fromhex("58 07 03 05 04 02 01 00 00 0f 59"))
-
     def test_uart_write_runs_in_module_task(self):
         source_path = (
             Path(__file__).resolve().parents[1]
@@ -65,32 +46,6 @@ class TrackerProtocolTest(unittest.TestCase):
         self.assertIn("_command_queued = true", source[queue_start:worker_start])
         self.assertIn("::write(_fd", source[worker_start:timeout_start])
         self.assertIn("process_pending_command();", source[run_start:open_start])
-
-    def test_rc_switch_control_invariants(self):
-        source_path = (
-            Path(__file__).resolve().parents[1]
-            / "px4_tracker_integration"
-            / "src"
-            / "modules"
-            / "uart_tracker"
-            / "UartTracker.cpp"
-        )
-        source = source_path.read_text(encoding="utf-8")
-        rc_start = source.index("void UartTracker::update_rc_switch")
-        usage_start = source.index("int UartTracker::print_usage")
-        rc_source = source[rc_start:usage_start]
-
-        self.assertIn("manual_control_setpoint_s::SOURCE_RC", rc_source)
-        self.assertIn("kRcSwitchDebounceUs", rc_source)
-        self.assertIn("kRcCommandGuardUs", rc_source)
-        self.assertIn("kRcMaxRetries", rc_source)
-        self.assertIn("CommandOrigin::RcSwitch", rc_source)
-        self.assertNotIn("::write(_fd", rc_source)
-
-        self.assertLess(
-            rc_source.index("RcSequenceStep::DetectMulti"),
-            rc_source.index("RcSequenceStep::AutolockCyclePosition"),
-        )
 
     def test_make_miss_distance_frame_layout(self):
         frame = make_miss_distance_frame(

@@ -148,23 +148,6 @@ uart_tracker send info
 
 发送帧为 `58 07 CMD0 CMD1 LEN DATA CHK 59`。NSH 命令先将完整帧放入单命令队列，实际串口写入由持有 `/dev/ttyS2` 文件描述符的 `uart_tracker` 任务执行，避免跨 NuttX 任务使用文件描述符导致 `EBADF (9)`。模块会继续在同一串口解析反馈帧；`uart_tracker status` 显示发送次数、错误次数、超时次数、响应次数及最后命令字。每次发送最多等待响应 2 秒，等待期间拒绝新的发送命令。发送功能要求慧眼RX连接飞控UART3 TX。
 
-## RC三档检测与自动锁定
-
-`TRK_RC_AUX` 选择 `manual_control_setpoint.aux1`～`aux6`，默认值 `0` 表示关闭。物理接收机通道通过对应的 `RC_MAP_AUXn` 映射；只有有效的真实RC输入会触发命令，QGC Joystick/MAVLink手动输入不会触发。
-
-三档AUX按 `-1 / 0 / +1` 解释，边界为 `-0.5` 和 `+0.5`，切换值稳定200 ms后生效：
-
-| 档位 | 命令序列 |
-| --- | --- |
-| 1（负值） | `detect 0` |
-| 2（中值） | `autolock 0 1`成功，等待300 ms，再执行`detect 1` |
-| 3（正值） | `detect 2`成功，等待300 ms，再执行`autolock 2 1` |
-| RC无效/丢失 | `autolock 0 1`成功，等待300 ms，再执行`detect 0` |
-
-第3档先开启多目标检测，因为慧眼V3.1协议规定自动锁定必须以“目标检测+多目标跟踪”为前提。每一步只在匹配响应且执行结果为0时继续；失败或2秒超时后最多重试3次，仍失败则锁存故障，等待拨杆改变、RC恢复或重新启用参数。
-
-启用 `TRK_RC_AUX` 后，拨杆是检测/自动锁定状态的唯一控制源，NSH的 `send detect` 和 `send autolock` 会被拒绝。其他查询、诊断和设备控制命令不受影响。`uart_tracker status` 可查看AUX值、稳定档位、目标/已应用状态、当前步骤、重试和故障。
-
 ## UART 信息转换为动作
 
 `uart_tracker` 现在支持把有效的 `00 81` 测偏数据转换为 PX4 云台动作输出。默认仍然是只解析和发布 `tracker_target`，不会输出动作；需要显式启用：

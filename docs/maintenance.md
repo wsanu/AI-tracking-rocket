@@ -3,7 +3,6 @@
 ## 单一事实来源
 
 - TRACK与UART功能源码：`px4_tracker_integration/`。
-- 慧眼RC三档映射和命令时序：`uart_tracker`及参数`TRK_RC_AUX`；不得在Commander或`track_control`重复实现。
 - 上游PX4版本：`reproducibility/px4-base.json`。
 - 上游设计依据：`design_sourse/`，只读保留。
 - 厂商示例：`uart_example/`，只读保留。
@@ -96,7 +95,6 @@ make hkust_nxt-dual_default -j4
 - `uart_tracker`长选项会导致实例化失败；先使用板级默认参数。
 - 离开TRACK后没有发布新的 `active=false` 状态，旧 `track_status` 可能被误读；当前模式以 `vehicle_status.nav_state` 为准。
 - `uart_tracker`启动持久化尚未完成，每次上电要检查状态。
-- RC三档控制默认关闭，换接收机或通道后必须重新核对 `RC_MAP_AUXn`、`TRK_RC_AUX` 和拨杆方向。
 - 固件FLASH约98.39%，继续增加模块前必须检查容量。
 - HK38203 V2.1电流比例尚需按实际硬件标定。
 
@@ -107,6 +105,5 @@ make hkust_nxt-dual_default -j4
 - [ ] WSL/Ubuntu目标固件重新编译通过。
 - [ ] 固件大小、散列和构建环境已记录。
 - [ ] 上板板型、UART、目标、TRACK和拆桨电机输出通过。
-- [ ] RC三档命令顺序、300 ms间隔、快速切档、响应失败重试和RC丢失安全关闭通过。
 - [ ] README与 `docs/reproduction.md` 命令已由另一环境照抄验证。
 - [ ] 未提交密钥、个人参数备份、飞行日志、构建目录或固件二进制。

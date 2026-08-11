@@ -18,9 +18,4 @@ param set TRK_TILT_MAX 60.0
 param set TRK_ENTRY_T 0.50
 param set TRK_LOST_ACT 0
 
-# RC tracker control is disabled by default for backward compatibility.
-# To use it, map a physical channel to RC_MAP_AUX1..6, then set this to
-# the matching AUX number. Example: RC_MAP_AUX1=8 and TRK_RC_AUX=1.
-param set TRK_RC_AUX 0
-
 param save
